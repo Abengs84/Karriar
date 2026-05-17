@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-label="Karriar">
+  <rect width="32" height="32" rx="7" fill="#8b2252"/>
+  <text
+    x="3.5"
+    y="25"
+    fill="#ffffff"
+    font-family="system-ui, -apple-system, Segoe UI, Arial, sans-serif"
+    font-size="27"
+    font-weight="700"
+  >K</text>
+  <text
+    x="22"
+    y="25"
+    fill="#ffffff"
+    font-family="system-ui, -apple-system, Segoe UI, Arial, sans-serif"
+    font-size="20"
+    font-weight="700"
+  >i</text>
+</svg>

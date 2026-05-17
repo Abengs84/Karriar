@@ -1,0 +1,53 @@
+# Elevdata / importfiler
+Responses.xlsx
+
+# Editor och AI-verktyg
+.specstory/
+.vscode/
+.cursor/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+.venv/
+venv/
+env/
+*.egg-info/
+.eggs/
+dist/
+build/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Node / frontend
+node_modules/
+frontend/dist/
+.npm
+*.tsbuildinfo
+
+# Lokal databas (genereras vid körning)
+backend/data/
+
+# Hemligheter
+.env
+.env.*
+!.env.example
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Övriga IDE-filer
+.idea/
+*.swp
+*.swo
+.flake8
+
+# Loggar
+*.log

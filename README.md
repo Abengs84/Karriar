@@ -1,0 +1,78 @@
+# Karriär – Placeringssystem
+
+Webbverktyg för att hantera rum, importera elevval från Excel (Google Form-export), placera elever manuellt via drag-and-drop och generera PDF-scheman per skola.
+
+## Funktioner
+
+- **Rum** – Academill-rum från [guide.abo.fi](https://guide.abo.fi/bookings/Academill?locale=sv) läggs in automatiskt vid start (seminarierum ~25 platser, grupprum ~13, mötesrum ~14). Du kan lägga till fler eller ta bort under fliken Rum.
+- **Excel-import** – kolumner A–H enligt Vi7-formuläret; dubbletter hoppas över vid omimport
+- **Statistik** – antal elever per inspirationsträff och pass (val 1–3)
+- **Placering** – dra grupper (samma inspiratör) till sessioner (rum + pass + inspirationsträff)
+- **Flera pass** – samma inspiratör kan ligga i flera sessioner om rummet är fullt
+- **Pass 2a/2b** – lunchspår sätts automatiskt vid placering i pass 2a eller 2b
+- **PDF** – en fil per skola, fyra scheman per sida (2×2)
+
+## Starta med Docker
+
+```bash
+docker compose up --build
+```
+
+Öppna **http://localhost:8000** (API). För utveckling med hot reload, kör backend och frontend separat (se nedan).
+
+Efter build servas frontend från samma port när static mount är konfigurerad – se `app/main.py`.
+
+## Lokal utveckling
+
+**Backend:**
+
+```bash
+cd backend
+pip install -r requirements.txt
+mkdir -p data
+uvicorn app.main:app --reload --port 8000
+```
+
+**Frontend:**
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+Öppna **http://localhost:5173** (proxy till API).
+
+## Excel-format
+
+| Kolumn | Innehåll |
+|--------|----------|
+| A | Timestamp |
+| B | Förnamn |
+| C | Efternamn |
+| D | Skola |
+| E | Inspirationsträff 1 |
+| F | Inspirationsträff 2 |
+| G | Inspirationsträff 3 |
+| H | Reserv |
+
+Exempel på val: `Ekonom – Cecilia Ruotsala`
+
+## Placeringsflöde
+
+1. Skapa rum med kapacitet (t.ex. 30).
+2. Importera Excel en gång.
+3. Under **Statistik** – se hur många unika elever som valt varje inspiratör (kolumn E–G/H).
+4. Under **Placering** – skapa session (rum + **tidspass** + inspiratör) och dra gruppen dit.
+5. Om fler elever än kapacitet: skapa **ny session** med samma inspiratör i ett **annat tidspass**.
+6. Kolumn E/F/G är önskemål – inte kopplade till pass 1/2/3 i schemat.
+7. Ladda ner PDF per skola.
+
+## Schema (PDF)
+
+- 10:00–10:45 Öppning i Akademisalen
+- Pass 1: 11:00–11:30
+- **Spår 2a:** Pass 2 kl. 11:45–12:15, lunch 12:15–13:00
+- **Spår 2b:** Lunch 11:30–12:15, Pass 2 kl. 12:30–13:00
+- Pass 3: 13:15–13:45
+- 14:00 Hemfärd

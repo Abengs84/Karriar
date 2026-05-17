@@ -1,0 +1,12 @@
+services:
+  karriar:
+    build: .
+    ports:
+      - "8000:8000"
+    volumes:
+      - karriar-data:/app/data
+    environment:
+      - DATABASE_URL=sqlite:///./data/karriar.db
+
+volumes:
+  karriar-data:
