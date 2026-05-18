@@ -110,6 +110,7 @@ class AutoSolveResult:
     score: int
     by_choice_field: dict[str, int]
     summary: str
+    suppressed_inspirators: list[str] = field(default_factory=list)
 
 
 def _student_choices_list(s: StudentRef) -> list[ChoiceRef]:
@@ -144,15 +145,55 @@ def _load_slot_from_orm(slot) -> SlotRef:
     )
 
 
-def _required_choices(s: StudentRef) -> list[ChoiceRef]:
-    """Val 1–3 ska placeras om möjligt; reserv är frivillig."""
+def _student_required_inspirations(s: StudentRef) -> set[str]:
+    return {c for c in (s.choice1, s.choice2, s.choice3) if c}
+
+
+def _compute_suppressed(students: list[StudentRef], threshold: int) -> set[str]:
+    if threshold <= 0:
+        return set()
+    counts: dict[str, int] = {}
+    for s in students:
+        for insp in _student_required_inspirations(s):
+            counts[insp] = counts.get(insp, 0) + 1
+    return {insp for insp, n in counts.items() if n <= threshold}
+
+
+def _effective_required_choices(
+    s: StudentRef, suppressed: set[str]
+) -> list[ChoiceRef]:
+    """Val 1–3; undertröskel-inspiratörer ersätts av reserv (en gång per elev)."""
+    out: list[ChoiceRef] = []
+    reserve_used = False
+    for field_name in ("choice1", "choice2", "choice3"):
+        val = getattr(s, field_name)
+        if not val:
+            continue
+        if val in suppressed:
+            if (
+                not reserve_used
+                and s.reserve
+                and s.reserve not in suppressed
+            ):
+                out.append(ChoiceRef(s.reserve, CHOICE_RANK["reserve"], "reserve"))
+                reserve_used = True
+            continue
+        out.append(ChoiceRef(val, CHOICE_RANK[field_name], field_name))
+    return out
+
+
+def _required_choices(s: StudentRef, suppressed: set[str] | None = None) -> list[ChoiceRef]:
+    if suppressed:
+        return _effective_required_choices(s, suppressed)
     return [c for c in _student_choices_list(s) if c.field != "reserve"]
 
 
-def _pending_needs(students: list[StudentRef]) -> list[UnplacedNeed]:
+def _pending_needs(
+    students: list[StudentRef], suppressed: set[str] | None = None
+) -> list[UnplacedNeed]:
     needs: list[UnplacedNeed] = []
     for s in students:
-        for c in _required_choices(s):
+        for c in _required_choices(s, suppressed):
             if not s.has_inspirator(c.inspiration):
                 needs.append(
                     UnplacedNeed(s.id, c.inspiration, c.rank, c.field)
@@ -167,11 +208,44 @@ def _room_pass_occupant(slots: list[SlotRef]) -> dict[tuple[int, str], str]:
     return occ
 
 
+def _estimate_group_size(
+    students: list[StudentRef] | None,
+    inspiration: str,
+    suppressed: set[str] | None = None,
+) -> int:
+    """Uppskattar hur många som fortfarande ska till samma inspiratör."""
+    if not students:
+        return 1
+    pending = 0
+    for s in students:
+        if s.has_inspirator(inspiration):
+            continue
+        for c in _required_choices(s, suppressed):
+            if c.inspiration == inspiration:
+                pending += 1
+                break
+    return max(1, pending)
+
+
+def _pick_existing_slot(
+    candidates: list[SlotRef], *, minimize_sessions: bool
+) -> SlotRef:
+    if minimize_sessions:
+        # Fyll befintliga sessioner innan en ny öppnas.
+        return max(candidates, key=lambda s: (len(s.student_ids), -s.remaining))
+    # Samla i befintlig session; vid paritet välj mindre rum.
+    return max(candidates, key=lambda s: (len(s.student_ids), -s.capacity))
+
+
 def _find_slot_for(
     slots: list[SlotRef],
     rooms: list[RoomRef],
     inspiration: str,
     pass_type: str,
+    students: list[StudentRef] | None = None,
+    *,
+    minimize_sessions: bool = False,
+    suppressed: set[str] | None = None,
 ) -> SlotRef | None:
     candidates = [
         s
@@ -181,28 +255,36 @@ def _find_slot_for(
         and s.remaining > 0
     ]
     if candidates:
-        return max(candidates, key=lambda s: s.remaining)
+        return _pick_existing_slot(candidates, minimize_sessions=minimize_sessions)
 
+    group_size = _estimate_group_size(students, inspiration, suppressed)
     occ = _room_pass_occupant(slots)
-    for room in sorted(rooms, key=lambda r: (-r.capacity, r.name)):
-        key = (room.id, pass_type)
-        if key in occ and occ[key] != inspiration:
-            continue
-        existing = next((s for s in slots if s.key == key), None)
-        if existing:
-            if existing.inspiration == inspiration and existing.remaining > 0:
-                return existing
-            continue
-        new_slot = SlotRef(
-            id=None,
-            room_id=room.id,
-            pass_type=pass_type,
-            inspiration=inspiration,
-            capacity=room.capacity,
-        )
-        slots.append(new_slot)
-        occ[key] = inspiration
-        return new_slot
+    if minimize_sessions:
+        ordered = sorted(rooms, key=lambda r: (-r.capacity, r.name))
+    else:
+        ordered = sorted(rooms, key=lambda r: (r.capacity, r.name))
+    for min_capacity in (group_size, 1):
+        for room in ordered:
+            if room.capacity < min_capacity:
+                continue
+            key = (room.id, pass_type)
+            if key in occ and occ[key] != inspiration:
+                continue
+            existing = next((s for s in slots if s.key == key), None)
+            if existing:
+                if existing.inspiration == inspiration and existing.remaining > 0:
+                    return existing
+                continue
+            new_slot = SlotRef(
+                id=None,
+                room_id=room.id,
+                pass_type=pass_type,
+                inspiration=inspiration,
+                capacity=room.capacity,
+            )
+            slots.append(new_slot)
+            occ[key] = inspiration
+            return new_slot
     return None
 
 
@@ -249,6 +331,9 @@ def _pick_pass2_variant(
     inspiration: str,
     student: StudentRef,
     students: list[StudentRef],
+    *,
+    minimize_sessions: bool = False,
+    suppressed: set[str] | None = None,
 ) -> str | None:
     if student.lunch_track == "2a":
         order: tuple[str, ...] = ("pass2a", "pass2b")
@@ -263,7 +348,11 @@ def _pick_pass2_variant(
             order = ("pass2b", "pass2a")
 
     for variant in order:
-        if _find_slot_for(slots, rooms, inspiration, variant):
+        if _find_slot_for(
+            slots, rooms, inspiration, variant, students,
+            minimize_sessions=minimize_sessions,
+            suppressed=suppressed,
+        ):
             return variant
     return None
 
@@ -275,9 +364,16 @@ def _pick_pass_type(
     schedule_pass: SchedulePass,
     student: StudentRef,
     students: list[StudentRef],
+    *,
+    minimize_sessions: bool = False,
+    suppressed: set[str] | None = None,
 ) -> str | None:
     if schedule_pass == "pass2":
-        return _pick_pass2_variant(slots, rooms, inspiration, student, students)
+        return _pick_pass2_variant(
+            slots, rooms, inspiration, student, students,
+            minimize_sessions=minimize_sessions,
+            suppressed=suppressed,
+        )
     return schedule_pass
 
 
@@ -329,22 +425,31 @@ def _best_choice_for_pass(
     slots: list[SlotRef],
     rooms: list[RoomRef],
     students: list[StudentRef],
+    *,
+    minimize_sessions: bool = False,
+    suppressed: set[str] | None = None,
 ) -> tuple[ChoiceRef, str] | None:
     if student.has_pass(schedule_pass):
         return None
 
     candidates: list[tuple[ChoiceRef, str]] = []
-    for choice in _required_choices(student):
+    for choice in _required_choices(student, suppressed):
         if student.has_inspirator(choice.inspiration):
             continue
         pass_type = _pick_pass_type(
-            slots, rooms, choice.inspiration, schedule_pass, student, students
+            slots, rooms, choice.inspiration, schedule_pass, student, students,
+            minimize_sessions=minimize_sessions,
+            suppressed=suppressed,
         )
         if not pass_type:
             continue
         if not _can_assign(student, choice.inspiration, pass_type):
             continue
-        slot = _find_slot_for(slots, rooms, choice.inspiration, pass_type)
+        slot = _find_slot_for(
+            slots, rooms, choice.inspiration, pass_type, students,
+            minimize_sessions=minimize_sessions,
+            suppressed=suppressed,
+        )
         if slot and slot.remaining > 0:
             candidates.append((choice, pass_type))
 
@@ -354,16 +459,18 @@ def _best_choice_for_pass(
     return candidates[0]
 
 
-def _student_difficulty(student: StudentRef) -> tuple[int, int]:
+def _student_difficulty(
+    student: StudentRef, suppressed: set[str] | None = None
+) -> tuple[int, int]:
     remaining = sum(
         1
-        for c in _required_choices(student)
+        for c in _required_choices(student, suppressed)
         if not student.has_inspirator(c.inspiration)
     )
     max_rank = max(
         (
             c.rank
-            for c in _required_choices(student)
+            for c in _required_choices(student, suppressed)
             if not student.has_inspirator(c.inspiration)
         ),
         default=0,
@@ -375,16 +482,23 @@ def solve_auto_placement(
     students: list[StudentRef],
     rooms: list[RoomRef],
     slots: list[SlotRef],
+    *,
+    minimize_sessions_per_inspirator: bool = False,
+    min_students_threshold: int = 0,
 ) -> AutoSolveResult:
     """Kör heuristiken. Muterar students/slots in-place."""
+    suppressed = _compute_suppressed(students, min_students_threshold)
+    suppressed_list = sorted(suppressed)
+
     if not rooms:
         return AutoSolveResult(
             placed_new=0,
             slots_created=0,
-            unplaced_needs=_pending_needs(students),
+            unplaced_needs=_pending_needs(students, suppressed),
             score=0,
             by_choice_field={},
             summary="Inga rum – skapa rum först.",
+            suppressed_inspirators=suppressed_list,
         )
 
     initial_placed = sum(len(s.placements) for s in students)
@@ -393,20 +507,32 @@ def solve_auto_placement(
     for schedule_pass in PASS_ORDER:
         if schedule_pass == "pass2":
             _prebalance_pass2_lunch(students, slots)
-        ordered = sorted(students, key=_student_difficulty, reverse=True)
+        ordered = sorted(
+            students,
+            key=lambda s: _student_difficulty(s, suppressed),
+            reverse=True,
+        )
         for student in ordered:
-            pick = _best_choice_for_pass(student, schedule_pass, slots, rooms, students)
+            pick = _best_choice_for_pass(
+                student, schedule_pass, slots, rooms, students,
+                minimize_sessions=minimize_sessions_per_inspirator,
+                suppressed=suppressed,
+            )
             if not pick:
                 continue
             choice, pass_type = pick
-            slot = _find_slot_for(slots, rooms, choice.inspiration, pass_type)
+            slot = _find_slot_for(
+                slots, rooms, choice.inspiration, pass_type, students,
+                minimize_sessions=minimize_sessions_per_inspirator,
+                suppressed=suppressed,
+            )
             if slot:
                 _assign(student, slot, pass_type)
 
     # Andra pass: försök fylla kvarvarande behov på vilken tid som helst
     for _ in range(3):
         improved = False
-        needs = _pending_needs(students)
+        needs = _pending_needs(students, suppressed)
         needs.sort(key=lambda n: (-n.rank, n.inspiration))
         for need in needs:
             student = next(s for s in students if s.id == need.student_id)
@@ -416,21 +542,30 @@ def solve_auto_placement(
                 if student.has_pass(schedule_pass):
                     continue
                 pass_type = _pick_pass_type(
-                    slots, rooms, need.inspiration, schedule_pass, student, students
+                    slots, rooms, need.inspiration, schedule_pass, student, students,
+                    minimize_sessions=minimize_sessions_per_inspirator,
+                    suppressed=suppressed,
                 )
                 if not pass_type:
                     continue
-                slot = _find_slot_for(slots, rooms, need.inspiration, pass_type)
+                slot = _find_slot_for(
+                    slots, rooms, need.inspiration, pass_type, students,
+                    minimize_sessions=minimize_sessions_per_inspirator,
+                    suppressed=suppressed,
+                )
                 if slot and _assign(student, slot, pass_type):
                     improved = True
                     break
         if not improved:
             break
 
+    # Ta bort tomma celler som skapats under sökning men aldrig fylldes.
+    slots[:] = [s for s in slots if len(s.student_ids) > 0]
+
     final_placed = sum(len(s.placements) for s in students)
     placed_new = final_placed - initial_placed
     slots_created = len(slots) - initial_slot_count
-    unplaced = _pending_needs(students)
+    unplaced = _pending_needs(students, suppressed)
     score = sum(
         c.rank
         for s in students
@@ -453,10 +588,14 @@ def solve_auto_placement(
     else:
         unplaced_part = f"{unplaced_count} val (1–3) kvar utan pass."
     summary = (
-        f"Placerade {placed_new} nya pass "
+        f"{placed_new} val placerade "
         f"(totalt {final_placed} pass på {len(students)} elever). "
         f"{unplaced_part}"
     )
+    if suppressed_list:
+        summary += (
+            f" {len(suppressed_list)} inspiratör(er) under tröskel – elever dirigeras till reserv."
+        )
 
     return AutoSolveResult(
         placed_new=placed_new,
@@ -465,16 +604,26 @@ def solve_auto_placement(
         score=score,
         by_choice_field=by_field,
         summary=summary,
+        suppressed_inspirators=suppressed_list,
     )
 
 
 def run_on_orm(
-    students_orm, rooms_orm, slots_orm
+    students_orm,
+    rooms_orm,
+    slots_orm,
+    *,
+    minimize_sessions_per_inspirator: bool = False,
+    min_students_threshold: int = 0,
 ) -> tuple[list[StudentRef], list[SlotRef], AutoSolveResult]:
     students = [_load_student_from_orm(s) for s in students_orm]
     rooms = [RoomRef(r.id, r.name, r.capacity) for r in rooms_orm]
     slots = [_load_slot_from_orm(s) for s in slots_orm]
-    result = solve_auto_placement(students, rooms, slots)
+    result = solve_auto_placement(
+        students, rooms, slots,
+        minimize_sessions_per_inspirator=minimize_sessions_per_inspirator,
+        min_students_threshold=min_students_threshold,
+    )
     return students, slots, result
 
 
@@ -495,6 +644,8 @@ def apply_solution_to_db(db, students_orm, slots: list[SlotRef]) -> int:
     slot_id_map: dict[tuple[int, str, str], int] = {}
 
     for slot in slots:
+        if len(slot.student_ids) == 0:
+            continue
         db_slot = None
         if slot.id is not None:
             db_slot = db.query(SessionSlot).filter(SessionSlot.id == slot.id).first()

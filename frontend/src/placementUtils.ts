@@ -15,7 +15,76 @@ export function studentRequiredChoices(s: Student): string[] {
   return [s.choice1, s.choice2, s.choice3].filter(Boolean) as string[];
 }
 
-export function studentChoseForPlacement(s: Student, inspiration: string): boolean {
+/** Elever som valt inspiratören i val 1–3 (samma logik som statistik-API). */
+export function studentsWhoChoseInspirator(students: Student[], inspiration: string): Student[] {
+  return students
+    .filter((s) => studentRequiredChoices(s).includes(inspiration))
+    .sort((a, b) =>
+      `${a.last_name} ${a.first_name}`.localeCompare(`${b.last_name} ${b.first_name}`, "sv")
+    );
+}
+
+/** Vilka val (1–3) eleven angav för inspiratören. */
+export function studentChoiceRanksForInspirator(s: Student, inspiration: string): number[] {
+  const ranks: number[] = [];
+  if (s.choice1 === inspiration) ranks.push(1);
+  if (s.choice2 === inspiration) ranks.push(2);
+  if (s.choice3 === inspiration) ranks.push(3);
+  return ranks;
+}
+
+export function formatChoiceRanks(ranks: number[]): string {
+  if (ranks.length === 0) return "";
+  return `(${ranks.map((r) => `Val ${r}`).join(", ")})`;
+}
+
+/** Inspiratörer med ≤ threshold elever (val 1–3). 0 = av. */
+export function getSuppressedInspirations(
+  students: Student[],
+  threshold: number
+): Set<string> {
+  if (threshold <= 0) return new Set();
+  const counts = new Map<string, number>();
+  for (const s of students) {
+    for (const insp of studentRequiredChoices(s)) {
+      counts.set(insp, (counts.get(insp) ?? 0) + 1);
+    }
+  }
+  const suppressed = new Set<string>();
+  for (const [insp, n] of counts) {
+    if (n <= threshold) suppressed.add(insp);
+  }
+  return suppressed;
+}
+
+/** Val 1–3; undertröskel ersätts av reserv (en gång per elev). */
+export function effectiveRequiredChoices(
+  s: Student,
+  suppressed: Set<string>
+): string[] {
+  const out: string[] = [];
+  let reserveUsed = false;
+  for (const c of studentRequiredChoices(s)) {
+    if (suppressed.has(c)) {
+      if (!reserveUsed && s.reserve && !suppressed.has(s.reserve)) {
+        out.push(s.reserve);
+        reserveUsed = true;
+      }
+    } else {
+      out.push(c);
+    }
+  }
+  return out;
+}
+
+export function studentChoseForPlacement(
+  s: Student,
+  inspiration: string,
+  suppressed?: Set<string>
+): boolean {
+  if (suppressed && suppressed.size > 0) {
+    return effectiveRequiredChoices(s, suppressed).includes(inspiration);
+  }
   return studentRequiredChoices(s).includes(inspiration);
 }
 
@@ -33,21 +102,30 @@ export function collectInspirations(students: Student[]): string[] {
   return [...set].sort();
 }
 
-function collectRequiredInspirations(students: Student[]): string[] {
+function collectEffectiveInspirations(
+  students: Student[],
+  suppressed: Set<string>
+): string[] {
   const set = new Set<string>();
   for (const s of students) {
-    for (const c of studentRequiredChoices(s)) {
+    for (const c of effectiveRequiredChoices(s, suppressed)) {
       set.add(c);
     }
   }
   return [...set].sort();
 }
 
-export function unplacedByInspirator(students: Student[]): [string, Student[]][] {
+export function unplacedByInspirator(
+  students: Student[],
+  minStudentsThreshold = 0
+): [string, Student[]][] {
+  const suppressed = getSuppressedInspirations(students, minStudentsThreshold);
   const map = new Map<string, Student[]>();
-  for (const inspiration of collectRequiredInspirations(students)) {
+  for (const inspiration of collectEffectiveInspirations(students, suppressed)) {
     const group = students.filter(
-      (s) => studentChoseForPlacement(s, inspiration) && !isPlacedWithInspirator(s, inspiration)
+      (s) =>
+        studentChoseForPlacement(s, inspiration, suppressed) &&
+        !isPlacedWithInspirator(s, inspiration)
     );
     if (group.length > 0) {
       map.set(inspiration, group);

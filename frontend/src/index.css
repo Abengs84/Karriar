@@ -77,6 +77,53 @@ input, select {
   margin: 0;
 }
 
+.app-header-left {
+  display: flex;
+  align-items: baseline;
+  gap: 1rem;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.app-header-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.65rem 1rem;
+  opacity: 0.9;
+  font-size: 0.9rem;
+}
+
+.retention-countdown {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.2rem 0.55rem;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.18);
+  font-variant-numeric: tabular-nums;
+  font-weight: 500;
+}
+
+.retention-countdown.urgent {
+  background: rgba(255, 200, 80, 0.35);
+}
+
+.app-header-clear {
+  flex-shrink: 0;
+  background: rgba(255, 255, 255, 0.12);
+  border-color: rgba(255, 255, 255, 0.45);
+  color: #fff;
+  font-size: 0.85rem;
+}
+
+.app-header-clear:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.22);
+}
+
+.app-header-clear:disabled {
+  opacity: 0.45;
+}
+
 .tabs {
   display: flex;
   gap: 0.25rem;
@@ -161,6 +208,14 @@ th {
   font-weight: 500;
 }
 
+tfoot .stats-total-row th,
+tfoot .stats-total-row td {
+  border-top: 2px solid var(--border);
+  border-bottom: none;
+  font-weight: 600;
+  color: var(--text);
+}
+
 .badge {
   display: inline-block;
   padding: 0.15rem 0.5rem;
@@ -178,6 +233,124 @@ th {
 .badge.ok {
   background: #d8f3dc;
   color: var(--success);
+}
+
+.stats-expand-col {
+  width: 2.25rem;
+  padding-left: 0.35rem;
+  padding-right: 0.35rem;
+}
+
+.stats-expand-cell {
+  vertical-align: middle;
+  padding-left: 0.35rem;
+  padding-right: 0.35rem;
+}
+
+.stats-expand-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.75rem;
+  height: 1.75rem;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+}
+
+.stats-expand-btn:hover:not(:disabled) {
+  color: var(--accent);
+  background: var(--accent-light);
+}
+
+.stats-expand-icon {
+  display: inline-block;
+  font-size: 0.65rem;
+  line-height: 1;
+  transition: transform 0.15s ease;
+}
+
+.stats-expand-icon.expanded {
+  transform: rotate(90deg);
+}
+
+.stats-row-expanded td {
+  border-bottom-color: transparent;
+}
+
+.stats-students-row td {
+  padding-top: 0;
+  padding-bottom: 0.75rem;
+  background: var(--accent-light);
+  border-bottom: 1px solid var(--border);
+}
+
+.stats-students-empty {
+  margin: 0.35rem 0 0.5rem;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.stats-student-list {
+  list-style: none;
+  margin: 0.35rem 0 0.5rem;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.stats-student-list li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 0.75rem;
+}
+
+.stats-student-link {
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--accent);
+  font-weight: 500;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.stats-student-link:hover {
+  color: #6b1a42;
+}
+
+.stats-student-choice {
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.stats-student-meta {
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.stats-student-status {
+  margin-left: auto;
+}
+
+.student-row-focus td {
+  background: #fff8e6;
+  animation: student-focus-fade 2.5s ease-out forwards;
+}
+
+@keyframes student-focus-fade {
+  0% {
+    background: #fde68a;
+  }
+  70% {
+    background: #fff8e6;
+  }
+  100% {
+    background: transparent;
+  }
 }
 
 /* Toasts – fixed, påverkar inte layout */
@@ -284,6 +457,49 @@ th {
   align-items: flex-start;
   gap: 0.5rem;
   cursor: pointer;
+}
+
+.auto-place-options {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.75rem 1rem;
+  margin: 1rem 0;
+}
+
+.auto-place-options label {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  cursor: pointer;
+}
+
+.auto-place-option-hint {
+  margin: 0.5rem 0 0;
+  font-size: 0.85rem;
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+.auto-place-threshold {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  margin-top: 0.75rem;
+}
+
+.auto-place-threshold input {
+  width: 5rem;
+  padding: 0.35rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font: inherit;
+}
+
+.auto-place-suppressed {
+  font-size: 0.85rem;
+  color: var(--muted);
+  margin: 0.5rem 0;
+  line-height: 1.45;
 }
 
 .auto-place-actions {
@@ -435,6 +651,16 @@ th {
 
 .grid-cell.empty {
   background: #faf9f7;
+}
+
+.grid-cell.reserved {
+  background: #f5f0f3;
+  border: 1px dashed var(--accent);
+}
+
+.cell-inspiration-reserved {
+  color: var(--accent);
+  opacity: 0.85;
 }
 
 .grid-cell.drop-target-ok {
@@ -663,4 +889,126 @@ th {
   background: var(--accent);
   color: #fff;
   border-color: var(--accent);
+}
+
+.app-header-actions {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.app-header-logout {
+  background: rgba(255, 255, 255, 0.15);
+  color: #fff;
+  border-color: rgba(255, 255, 255, 0.35);
+}
+
+.app-header-logout:hover {
+  background: rgba(255, 255, 255, 0.25);
+}
+
+.login-page {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1.5rem;
+}
+
+.login-card {
+  width: 100%;
+  max-width: 400px;
+}
+
+.login-lead {
+  color: var(--muted);
+  font-size: 0.95rem;
+  margin-bottom: 1.25rem;
+}
+
+.login-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+}
+
+.login-form label {
+  font-size: 0.9rem;
+  font-weight: 500;
+}
+
+.login-error {
+  color: #b91c1c;
+  font-size: 0.9rem;
+  margin: 0;
+}
+
+.login-privacy {
+  margin: 1.25rem 0 0;
+  text-align: center;
+  font-size: 0.9rem;
+}
+
+.link-button {
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--accent);
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.privacy-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+  z-index: 20000;
+}
+
+.privacy-dialog {
+  max-width: 560px;
+  max-height: 85vh;
+  overflow: auto;
+}
+
+.privacy-body h3 {
+  font-size: 1rem;
+  margin-top: 1rem;
+}
+
+.privacy-body ul {
+  margin: 0.35rem 0 0.75rem;
+  padding-left: 1.25rem;
+}
+
+.privacy-muted {
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.privacy-actions {
+  margin-top: 1rem;
+  display: flex;
+  justify-content: flex-end;
+}
+
+.integritet-list {
+  list-style: none;
+  padding: 0;
+  margin: 1rem 0 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.integritet-hint {
+  display: block;
+  font-size: 0.85rem;
+  color: var(--muted);
+  margin-top: 0.35rem;
 }

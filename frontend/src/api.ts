@@ -43,6 +43,14 @@ export type AutoSolveResult = {
   by_choice_field: Record<string, number>;
   summary: string;
   dry_run: boolean;
+  suppressed_inspirators: string[];
+};
+
+export type RetentionStatus = {
+  enabled: boolean;
+  purge_at: string | null;
+  seconds_remaining: number | null;
+  retention_hours: number;
 };
 
 export type InspiratorStat = {
@@ -50,10 +58,35 @@ export type InspiratorStat = {
   count: number;
   placed: number;
   unplaced: number;
+  pass_count: number;
 };
 
+export class AuthError extends Error {
+  constructor(message = "Ej inloggad") {
+    super(message);
+    this.name = "AuthError";
+  }
+}
+
+type OnUnauthorized = () => void;
+let onUnauthorized: OnUnauthorized | null = null;
+
+export function setUnauthorizedHandler(handler: OnUnauthorized | null) {
+  onUnauthorized = handler;
+}
+
+const fetchOpts: RequestInit = { credentials: "include" };
+
 async function json<T>(url: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(url, init);
+  const res = await fetch(url, { ...fetchOpts, ...init });
+  if (res.status === 401) {
+    onUnauthorized?.();
+    throw new AuthError("Ej inloggad");
+  }
+  if (res.status === 403) {
+    const err = await res.json().catch(() => ({ detail: "Åtkomst nekad" }));
+    throw new Error(err.detail || "Åtkomst nekad");
+  }
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: res.statusText }));
     throw new Error(err.detail || "Något gick fel");
@@ -76,12 +109,29 @@ export const api = {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(data),
       }),
-    delete: (id: number) => fetch(`${API}/rooms/${id}`, { method: "DELETE" }),
+    delete: (id: number) =>
+      fetch(`${API}/rooms/${id}`, { method: "DELETE", ...fetchOpts }).then((r) => {
+        if (r.status === 401) {
+          onUnauthorized?.();
+          throw new AuthError();
+        }
+        if (!r.ok) throw new Error("Kunde inte ta bort rum");
+      }),
   },
   students: {
     list: () => json<Student[]>(`${API}/students`),
+    clearAll: () =>
+      json<{
+        ok: boolean;
+        removed_placements: number;
+        removed_students: number;
+        removed_session_slots: number;
+      }>(`${API}/students`, { method: "DELETE" }),
   },
   schools: () => json<{ school: string; count: number }[]>(`${API}/schools`),
+  retention: {
+    status: () => json<RetentionStatus>(`${API}/retention`),
+  },
   sessionSlots: {
     list: (passType?: string) =>
       json<SessionSlot[]>(
@@ -101,12 +151,17 @@ export const api = {
   import: async (file: File) => {
     const fd = new FormData();
     fd.append("file", file);
-    const res = await fetch(`${API}/import/excel`, { method: "POST", body: fd });
+    const res = await fetch(`${API}/import/excel`, { method: "POST", body: fd, ...fetchOpts });
+    if (res.status === 401) {
+      onUnauthorized?.();
+      throw new AuthError();
+    }
     if (!res.ok) throw new Error((await res.json()).detail || "Import misslyckades");
     return res.json() as Promise<{
       imported: number;
       skipped_duplicates: number;
       total_students: number;
+      retention: RetentionStatus;
     }>;
   },
   stats: () => json<InspiratorStat[]>(`${API}/stats/inspirators`),
@@ -124,13 +179,11 @@ export const api = {
         skip_already_at_pass?: number;
         skip_already_with_inspirator?: number;
         skip_not_chose?: number;
-      }>(`${API}/placements/at-cell`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ student_ids, room_id, pass_type, inspiration }),
-        }
-      ),
+      }>(`${API}/placements/at-cell`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ student_ids, room_id, pass_type, inspiration }),
+      }),
     bulk: (student_ids: number[], session_slot_id: number) =>
       json<{ placed: number; skipped_capacity: number; skipped_ineligible: number }>(
         `${API}/placements/bulk`,
@@ -140,7 +193,14 @@ export const api = {
           body: JSON.stringify({ student_ids, session_slot_id }),
         }
       ),
-    remove: (id: number) => fetch(`${API}/placements/${id}`, { method: "DELETE" }),
+    remove: (id: number) =>
+      fetch(`${API}/placements/${id}`, { method: "DELETE", ...fetchOpts }).then((r) => {
+        if (r.status === 401) {
+          onUnauthorized?.();
+          throw new AuthError();
+        }
+        if (!r.ok) throw new Error("Kunde inte ta bort placering");
+      }),
     setStudentPass: (
       student_id: number,
       pass_type: "pass1" | "pass2" | "pass3",
@@ -151,7 +211,12 @@ export const api = {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ student_id, pass_type, session_slot_id }),
       }),
-    autoSolve: (body: { mode: "fill" | "replace"; dry_run: boolean }) =>
+    autoSolve: (body: {
+      mode: "fill" | "replace";
+      dry_run: boolean;
+      minimize_sessions_per_inspirator?: boolean;
+      min_students_threshold?: number;
+    }) =>
       json<AutoSolveResult>(`${API}/placements/auto-solve`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -159,10 +224,18 @@ export const api = {
       }),
   },
   pdfUrl: (school: string) => `${API}/pdf/school/${encodeURIComponent(school)}`,
+  gdprExportUrl: `${API}/gdpr/export`,
   lunchTrack: (studentId: number, lunch_track: string | null) =>
     fetch(`${API}/students/${studentId}/lunch-track`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ lunch_track }),
+      ...fetchOpts,
+    }).then((r) => {
+      if (r.status === 401) {
+        onUnauthorized?.();
+        throw new AuthError();
+      }
+      if (!r.ok) throw new Error("Kunde inte uppdatera lunchspår");
     }),
 };

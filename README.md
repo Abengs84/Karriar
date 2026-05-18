@@ -14,11 +14,31 @@ Webbverktyg för att hantera rum, importera elevval från Excel (Google Form-exp
 
 ## Starta med Docker
 
+1. Kopiera `.env.example` till `.env` och sätt ett starkt lösenord:
+
+```bash
+cp .env.example .env
+# Redigera KARRIAR_PASSWORD
+```
+
+2. Starta:
+
 ```bash
 docker compose up --build
 ```
 
-Öppna **http://localhost:8000** (API). För utveckling med hot reload, kör backend och frontend separat (se nedan).
+Öppna **http://localhost:8000** och logga in med lösenordet. För utveckling med hot reload, kör backend och frontend separat (se nedan).
+
+**Produktion (AWS m.m.):** använd HTTPS och sätt `KARRIAR_COOKIE_SECURE=true`. Se [docs/PERSONUPPGIFTER.md](docs/PERSONUPPGIFTER.md) för GDPR.
+
+**Lokal utveckling (utan Docker):** ladda ner IP-listor och sätt lösenord:
+
+```powershell
+cd backend/scripts
+./download_fi_cidr.ps1
+```
+
+**Säkerhet:** standard är endast finska IP och automatisk radering av elevdata 3 timmar efter Excel-import (nedräkning i sidhuvudet). Konfigurera via `.env`.
 
 Efter build servas frontend från samma port när static mount är konfigurerad – se `app/main.py`.
 
@@ -30,6 +50,8 @@ Efter build servas frontend från samma port när static mount är konfigurerad 
 cd backend
 pip install -r requirements.txt
 mkdir -p data
+# PowerShell: $env:KARRIAR_PASSWORD="ditt-lösenord"
+# Bash: export KARRIAR_PASSWORD=ditt-lösenord
 uvicorn app.main:app --reload --port 8000
 ```
 
@@ -48,13 +70,13 @@ npm run dev
 | Kolumn | Innehåll |
 |--------|----------|
 | A | Timestamp |
-| B | Förnamn |
-| C | Efternamn |
+| B | Efternamn |
+| C | Förnamn |
 | D | Skola |
-| E | Inspirationsträff 1 |
-| F | Inspirationsträff 2 |
-| G | Inspirationsträff 3 |
-| H | Reserv |
+| E | INSPIRATIONSTRÄFF 1 |
+| F | INSPIRATIONSTRÄFF 2 |
+| G | INSPIRATIONSTRÄFF 3 |
+| H | INSPIRATIONSTRÄFF - RESERV |
 
 Exempel på val: `Ekonom – Cecilia Ruotsala`
 

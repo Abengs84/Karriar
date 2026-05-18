@@ -3,10 +3,19 @@ services:
     build: .
     ports:
       - "8000:8000"
+    env_file:
+      - .env
     volumes:
       - karriar-data:/app/data
     environment:
       - DATABASE_URL=sqlite:///./data/karriar.db
+      - KARRIAR_PASSWORD=${KARRIAR_PASSWORD}
+      - KARRIAR_SESSION_SECRET=${KARRIAR_SESSION_SECRET:-}
+      - KARRIAR_COOKIE_SECURE=${KARRIAR_COOKIE_SECURE:-false}
+      - KARRIAR_FINLAND_IP_ONLY=${KARRIAR_FINLAND_IP_ONLY:-true}
+      - KARRIAR_GEOIP_ALLOW_LOCAL=${KARRIAR_GEOIP_ALLOW_LOCAL:-true}
+      - KARRIAR_RETENTION_ENABLED=${KARRIAR_RETENTION_ENABLED:-true}
+      - KARRIAR_RETENTION_HOURS=${KARRIAR_RETENTION_HOURS:-3}
 
 volumes:
   karriar-data:

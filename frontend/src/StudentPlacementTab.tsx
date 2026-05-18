@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { api, SessionSlot, Student } from "./api";
 import { placementAtSchedulePass, schedulePassKey, studentChoices } from "./placementUtils";
 
@@ -11,19 +11,54 @@ const PASS_ROWS = [
 type Props = {
   students: Student[];
   slots: SessionSlot[];
+  highlightStudentId?: number | null;
+  onHighlightClear?: () => void;
   onRefresh: () => Promise<void>;
   showMsg: (type: "error" | "success", text: string) => void;
 };
 
 function slotLabel(s: SessionSlot): string {
   const free = Math.max(0, s.room_capacity - s.placed_count);
-  return `${s.room_name} – ${s.inspiration} (${free} lediga)`;
+  return `${s.inspiration}, ${s.room_name} (${free} lediga)`;
 }
 
-export function StudentPlacementTab({ students, slots, onRefresh, showMsg }: Props) {
+export function StudentPlacementTab({
+  students,
+  slots,
+  highlightStudentId,
+  onHighlightClear,
+  onRefresh,
+  showMsg,
+}: Props) {
   const [schoolFilter, setSchoolFilter] = useState("");
   const [search, setSearch] = useState("");
   const [savingId, setSavingId] = useState<number | null>(null);
+  const [focusedId, setFocusedId] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (!highlightStudentId) return;
+    const student = students.find((s) => s.id === highlightStudentId);
+    if (!student) {
+      onHighlightClear?.();
+      return;
+    }
+    setSchoolFilter("");
+    setSearch(`${student.first_name} ${student.last_name}`);
+    setFocusedId(highlightStudentId);
+    const frame = requestAnimationFrame(() => {
+      document
+        .getElementById(`student-row-${highlightStudentId}`)
+        ?.scrollIntoView({ behavior: "smooth", block: "center" });
+    });
+    const timer = window.setTimeout(() => {
+      setFocusedId(null);
+      onHighlightClear?.();
+    }, 2500);
+    return () => {
+      cancelAnimationFrame(frame);
+      window.clearTimeout(timer);
+    };
+  }, [highlightStudentId, students, onHighlightClear]);
 
   const schools = useMemo(
     () => [...new Set(students.map((s) => s.school))].sort((a, b) => a.localeCompare(b, "sv")),
@@ -140,7 +175,16 @@ export function StudentPlacementTab({ students, slots, onRefresh, showMsg }: Pro
           </thead>
           <tbody>
             {filtered.map((s) => (
-              <tr key={s.id} className={savingId === s.id ? "saving" : undefined}>
+              <tr
+                key={s.id}
+                id={`student-row-${s.id}`}
+                className={[
+                  savingId === s.id ? "saving" : "",
+                  focusedId === s.id ? "student-row-focus" : "",
+                ]
+                  .filter(Boolean)
+                  .join(" ") || undefined}
+              >
                 <td className="student-name">
                   {s.first_name} {s.last_name}
                 </td>

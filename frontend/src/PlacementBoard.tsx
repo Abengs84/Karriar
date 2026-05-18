@@ -110,11 +110,19 @@ type Props = {
   rooms: Room[];
   students: Student[];
   slots: SessionSlot[];
+  minStudentsThreshold: number;
   onRefresh: () => Promise<{ students: Student[]; slots: SessionSlot[] }>;
   showMsg: (type: ToastType, text: string) => void;
 };
 
-export function PlacementBoard({ rooms, students, slots, onRefresh, showMsg }: Props) {
+export function PlacementBoard({
+  rooms,
+  students,
+  slots,
+  minStudentsThreshold,
+  onRefresh,
+  showMsg,
+}: Props) {
   const [dragGroup, setDragGroup] = useState<{ inspiration: string; ids: number[] } | null>(null);
   /** Håller källkortet dolt tills drop-animation + API är klara (undviker "hopp tillbaka"). */
   const [concealedInspiration, setConcealedInspiration] = useState<string | null>(null);
@@ -149,7 +157,7 @@ export function PlacementBoard({ rooms, students, slots, onRefresh, showMsg }: P
     slotMap.set(`${s.room_id}-${s.pass_type}`, s);
   }
 
-  const groups = unplacedByInspirator(students);
+  const groups = unplacedByInspirator(students, minStudentsThreshold);
 
   const dropMenuRef = useRef(dropMenu);
   dropMenuRef.current = dropMenu;
@@ -456,6 +464,12 @@ export function PlacementBoard({ rooms, students, slots, onRefresh, showMsg }: P
             Dra en grupp till en ruta i schemat. Släpp tillbaka här för att ångra. Varje elev kan
             bara ha ett pass per tid.
           </p>
+          {minStudentsThreshold > 0 && (
+            <p className="pool-hint pool-hint-threshold">
+              Tröskel {minStudentsThreshold}: inspiratörer med färre elever visas inte här – deras
+              elever listas under reserv om de har reservval.
+            </p>
+          )}
           <div className="pool-list">
             {groups.map(([inspiration, group]) => (
               <DraggableGroup
@@ -649,6 +663,7 @@ function GridCell({
     data: { roomId: room.id, passType },
   });
 
+  const reserved = slot != null && slot.placed_count === 0;
   const occupied = slot != null && slot.placed_count > 0;
   const full = occupied && slot.placed_count >= room.capacity;
 
@@ -669,9 +684,9 @@ function GridCell({
       data-room-id={room.id}
       data-pass-type={passType}
       ref={setNodeRef}
-      className={`grid-cell ${dropTone === "ok" ? "drop-target-ok" : ""} ${dropTone === "conflict" ? "drop-target-conflict" : ""} ${full ? "full" : ""} ${!occupied ? "empty" : ""}`}
+      className={`grid-cell ${dropTone === "ok" ? "drop-target-ok" : ""} ${dropTone === "conflict" ? "drop-target-conflict" : ""} ${full ? "full" : ""} ${reserved ? "reserved" : ""} ${!occupied && !reserved ? "empty" : ""}`}
       onContextMenu={(e) => {
-        if (occupied && slot) onContextMenuSlot(e, slot);
+        if (slot && (occupied || reserved)) onContextMenuSlot(e, slot);
       }}
     >
       {occupied && slot ? (
@@ -680,6 +695,11 @@ function GridCell({
           <div className="cell-count">
             {slot.placed_count} elever · {Math.max(0, room.capacity - slot.placed_count)} ledig(a) plats(er) kvar
           </div>
+        </>
+      ) : reserved && slot ? (
+        <>
+          <div className="cell-inspiration cell-inspiration-reserved">{slot.inspiration}</div>
+          <div className="cell-count">Tom cell – dra ny grupp hit för att ersätta</div>
         </>
       ) : (
         <span className="cell-placeholder">Dra hit</span>

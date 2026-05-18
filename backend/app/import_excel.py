@@ -12,6 +12,16 @@ def _cell(row, idx: int) -> str | None:
     return s if s else None
 
 
+def _capitalize_name_part(part: str) -> str:
+    """Ett ord eller bindestrecksdelat namn: 'cajsa' / 'anna-maria' -> 'Cajsa' / 'Anna-Maria'."""
+    return "-".join(p.capitalize() for p in part.split("-"))
+
+
+def capitalize_person_name(name: str) -> str:
+    """För- eller efternamn: 'cajsa maris' -> 'Cajsa Maris'."""
+    return " ".join(_capitalize_name_part(part) for part in name.split())
+
+
 def import_students_from_excel(db: Session, file_bytes: bytes) -> tuple[int, int]:
     from io import BytesIO
 
@@ -26,9 +36,14 @@ def import_students_from_excel(db: Session, file_bytes: bytes) -> tuple[int, int
     if first is None:
         return 0, 0
 
-    # Skip header if column B looks like a label
-    header_labels = ("förnamn", "fornamn", "firstname", "etunimi")
-    if first[1] and str(first[1]).lower() in header_labels:
+    # Skip header if column B or C looks like a name label
+    name_header_labels = (
+        "förnamn", "fornamn", "firstname", "etunimi",
+        "efternamn", "efternamn", "lastname", "sukunimi",
+    )
+    col_b = str(first[1]).lower().strip() if first[1] else ""
+    col_c = str(first[2]).lower().strip() if len(first) > 2 and first[2] else ""
+    if col_b in name_header_labels or col_c in name_header_labels:
         pass
     else:
         rows = iter([first, *rows])
@@ -41,11 +56,14 @@ def import_students_from_excel(db: Session, file_bytes: bytes) -> tuple[int, int
     for row in rows:
         if not row or len(row) < 4:
             continue
-        first_name = _cell(row, 1)
-        last_name = _cell(row, 2)
+        last_name = _cell(row, 1)
+        first_name = _cell(row, 2)
         school = _cell(row, 3)
         if not first_name or not last_name or not school:
             continue
+
+        first_name = capitalize_person_name(first_name)
+        last_name = capitalize_person_name(last_name)
 
         key = (first_name.lower(), last_name.lower(), school.lower())
         if key in existing_keys:

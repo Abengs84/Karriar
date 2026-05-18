@@ -55,6 +55,13 @@ class SessionSlot(Base):
     )
 
 
+class SystemMeta(Base):
+    __tablename__ = "system_meta"
+
+    key = Column(String, primary_key=True)
+    value = Column(String, nullable=True)
+
+
 class Placement(Base):
     __tablename__ = "placements"
     __table_args__ = (

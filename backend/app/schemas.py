@@ -79,12 +79,28 @@ class InspiratorStat(BaseModel):
     count: int
     placed: int
     unplaced: int
+    pass_count: int
+
+
+class RetentionStatus(BaseModel):
+    enabled: bool
+    purge_at: str | None = None
+    seconds_remaining: int | None = None
+    retention_hours: int = 3
 
 
 class ImportResult(BaseModel):
     imported: int
     skipped_duplicates: int
     total_students: int
+    retention: RetentionStatus
+
+
+class ClearStudentsResult(BaseModel):
+    ok: bool
+    removed_placements: int
+    removed_students: int
+    removed_session_slots: int
 
 
 class LunchTrackUpdate(BaseModel):
@@ -100,6 +116,8 @@ class SetStudentPassRequest(BaseModel):
 class AutoSolveRequest(BaseModel):
     mode: str = "fill"  # fill | replace
     dry_run: bool = True
+    minimize_sessions_per_inspirator: bool = False
+    min_students_threshold: int = Field(default=0, ge=0, le=500)
 
 
 class UnplacedNeedOut(BaseModel):
@@ -118,3 +136,4 @@ class AutoSolveOut(BaseModel):
     by_choice_field: dict[str, int]
     summary: str
     dry_run: bool
+    suppressed_inspirators: list[str] = []

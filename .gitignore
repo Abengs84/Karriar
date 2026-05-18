@@ -1,5 +1,5 @@
 # Elevdata / importfiler
-Responses.xlsx
+*.xlsx
 
 # Editor och AI-verktyg
 .specstory/
@@ -32,6 +32,8 @@ frontend/dist/
 
 # Lokal databas (genereras vid körning)
 backend/data/
+!backend/data/.gitkeep
+backend/data/*.cidr
 
 # Hemligheter
 .env

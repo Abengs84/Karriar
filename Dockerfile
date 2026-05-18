@@ -15,10 +15,21 @@ WORKDIR /app
 COPY backend/requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Finska IP-intervall (landskod FI)
+RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates \
+    && mkdir -p /app/backend/data \
+    && curl -fsSL -o /app/backend/data/fi-ipv4.cidr \
+       "https://raw.githubusercontent.com/ipverse/rir-ip/master/country/fi/ipv4-aggregated.txt" \
+    && curl -fsSL -o /app/backend/data/fi-ipv6.cidr \
+       "https://raw.githubusercontent.com/ipverse/rir-ip/master/country/fi/ipv6-aggregated.txt" \
+    && apt-get purge -y curl && apt-get autoremove -y && rm -rf /var/lib/apt/lists/*
+
 COPY backend/ ./backend/
+COPY img/ ./img/
 COPY --from=frontend-build /app/frontend/dist ./frontend/dist
 
 ENV DATABASE_URL=sqlite:///./data/karriar.db
+# Sätt KARRIAR_PASSWORD vid körning (docker-compose / .env)
 ENV PYTHONPATH=/app/backend
 ENV FRONTEND_DIR=/app/frontend/dist
 ENV PYTHONUTF8=1

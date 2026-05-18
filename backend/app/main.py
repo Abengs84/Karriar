@@ -1,20 +1,35 @@
+import asyncio
 import os
+from datetime import datetime, timezone
 from pathlib import Path
 
-from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, File, HTTPException, Request, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
+from starlette.middleware.base import BaseHTTPMiddleware
 from sqlalchemy import func
 from sqlalchemy.orm import Session, joinedload
 
-from app.database import get_db, init_db
+from app.auth import (
+    SESSION_COOKIE,
+    SESSION_MAX_AGE,
+    cookie_secure,
+    create_session_token,
+    get_password,
+    is_authenticated,
+    verify_password,
+)
+from app.database import SessionLocal, get_db, init_db
 from app.helpers import (
+    purge_empty_session_slots,
     collect_all_inspirations,
     has_placement_at_pass,
     is_placed_with_inspirator,
     schedule_pass_key,
     student_chose,
+    student_chose_required,
 )
 from app.auto_placer import (
     RoomRef,
@@ -23,15 +38,25 @@ from app.auto_placer import (
     run_on_orm,
     solve_auto_placement,
 )
+from app.fi_ip import finland_only_enabled, is_request_from_finland, load_fi_networks
 from app.import_excel import import_students_from_excel
 from app.models import Placement, Room, SessionSlot, Student
+from app.retention import (
+    check_and_purge_if_due,
+    purge_student_data,
+    retention_status,
+    retention_worker,
+    schedule_purge_after_import,
+)
 from app.pdf_generator import generate_school_pdf
 from app.schemas import (
     AutoSolveOut,
     AutoSolveRequest,
     BulkPlaceRequest,
     PlaceAtCellRequest,
+    ClearStudentsResult,
     ImportResult,
+    RetentionStatus,
     UnplacedNeedOut,
     InspiratorStat,
     LunchTrackUpdate,
@@ -47,6 +72,48 @@ from app.schemas import (
 
 app = FastAPI(title="Karriär")
 
+PUBLIC_API_PATHS = frozenset({
+    "/api/health",
+    "/api/auth/login",
+    "/api/auth/logout",
+    "/api/auth/status",
+})
+
+GEO_EXEMPT_PATHS = frozenset({"/api/health"})
+
+
+class FinlandIpMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request, call_next):
+        if not finland_only_enabled():
+            return await call_next(request)
+        path = request.url.path
+        if not path.startswith("/api/") or path in GEO_EXEMPT_PATHS:
+            return await call_next(request)
+        if request.method == "OPTIONS":
+            return await call_next(request)
+        if not is_request_from_finland(request):
+            return JSONResponse(
+                status_code=403,
+                content={
+                    "detail": "Åtkomst tillåten endast från finska IP-adresser.",
+                },
+            )
+        return await call_next(request)
+
+
+class AuthMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request, call_next):
+        if request.method == "OPTIONS":
+            return await call_next(request)
+        path = request.url.path
+        if path.startswith("/api/") and path not in PUBLIC_API_PATHS:
+            if not is_authenticated(request):
+                return JSONResponse(status_code=401, content={"detail": "Ej inloggad"})
+        return await call_next(request)
+
+
+app.add_middleware(AuthMiddleware)
+app.add_middleware(FinlandIpMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -56,9 +123,54 @@ app.add_middleware(
 )
 
 
+class LoginBody(BaseModel):
+    password: str
+
+
 @app.on_event("startup")
-def startup():
+async def startup():
+    get_password()
+    load_fi_networks()
     init_db()
+    db = SessionLocal()
+    try:
+        check_and_purge_if_due(db)
+    finally:
+        db.close()
+    asyncio.create_task(retention_worker())
+
+
+@app.post("/api/auth/login")
+def auth_login(body: LoginBody, response: Response):
+    if not verify_password(body.password):
+        raise HTTPException(status_code=401, detail="Fel lösenord")
+    token = create_session_token()
+    response.set_cookie(
+        key=SESSION_COOKIE,
+        value=token,
+        httponly=True,
+        samesite="lax",
+        secure=cookie_secure(),
+        max_age=SESSION_MAX_AGE,
+        path="/",
+    )
+    return {"ok": True}
+
+
+@app.post("/api/auth/logout")
+def auth_logout(response: Response):
+    response.delete_cookie(SESSION_COOKIE, path="/")
+    return {"ok": True}
+
+
+@app.get("/api/auth/status")
+def auth_status(request: Request):
+    return {"authenticated": is_authenticated(request)}
+
+
+@app.get("/api/retention", response_model=RetentionStatus)
+def get_retention(db: Session = Depends(get_db)):
+    return RetentionStatus(**retention_status(db))
 
 
 def _slot_out(slot: SessionSlot) -> SessionSlotOut:
@@ -101,6 +213,27 @@ def _student_out(s: Student) -> StudentOut:
         lunch_track=s.lunch_track,
         placements=placements,
     )
+
+
+@app.get("/api/gdpr/export")
+def gdpr_export(db: Session = Depends(get_db)):
+    """Registerutdrag / dataportabilitet (GDPR art. 15 och 20)."""
+    students = (
+        db.query(Student)
+        .options(
+            joinedload(Student.placements)
+            .joinedload(Placement.session_slot)
+            .joinedload(SessionSlot.room)
+        )
+        .order_by(Student.school, Student.last_name, Student.first_name)
+        .all()
+    )
+    return {
+        "exported_at": datetime.now(timezone.utc).isoformat(),
+        "purpose": "Karriär-evenemanget – placering och scheman",
+        "student_count": len(students),
+        "students": [_student_out(s).model_dump() for s in students],
+    }
 
 
 # --- Rooms ---
@@ -148,6 +281,8 @@ def delete_room(room_id: int, db: Session = Depends(get_db)):
 # --- Session slots ---
 @app.get("/api/session-slots", response_model=list[SessionSlotOut])
 def list_session_slots(pass_type: str | None = None, db: Session = Depends(get_db)):
+    purge_empty_session_slots(db)
+    db.commit()
     q = db.query(SessionSlot).options(
         joinedload(SessionSlot.room),
         joinedload(SessionSlot.placements),
@@ -225,6 +360,12 @@ def list_schools(db: Session = Depends(get_db)):
     return [{"school": r[0], "count": r[1]} for r in rows.all()]
 
 
+@app.delete("/api/students", response_model=ClearStudentsResult)
+def clear_all_students(db: Session = Depends(get_db)):
+    result = purge_student_data(db)
+    return ClearStudentsResult(**result)
+
+
 @app.patch("/api/students/{student_id}/lunch-track")
 def update_lunch_track(
     student_id: int, data: LunchTrackUpdate, db: Session = Depends(get_db)
@@ -246,11 +387,13 @@ async def import_excel(file: UploadFile = File(...), db: Session = Depends(get_d
         raise HTTPException(400, "Ladda upp en Excel-fil (.xlsx)")
     content = await file.read()
     imported, skipped = import_students_from_excel(db, content)
+    schedule_purge_after_import(db)
     total = db.query(Student).count()
     return ImportResult(
         imported=imported,
         skipped_duplicates=skipped,
         total_students=total,
+        retention=RetentionStatus(**retention_status(db)),
     )
 
 
@@ -265,19 +408,26 @@ def inspirator_stats(db: Session = Depends(get_db)):
         .all()
     )
     inspirations = collect_all_inspirations(students)
+    slot_counts = dict(
+        db.query(SessionSlot.inspiration, func.count(SessionSlot.id))
+        .group_by(SessionSlot.inspiration)
+        .all()
+    )
     result = []
 
     for inspiration in sorted(inspirations):
-        chose = [s for s in students if student_chose(s, inspiration)]
-        placed = [s for s in chose if is_placed_with_inspirator(s, inspiration)]
-        count = len(chose)
-        placed_n = len(placed)
+        required = [s for s in students if student_chose_required(s, inspiration)]
+        placed_n = sum(
+            1 for s in required if is_placed_with_inspirator(s, inspiration)
+        )
+        unplaced_n = len(required) - placed_n
         result.append(
             InspiratorStat(
                 inspiration=inspiration,
-                count=count,
+                count=len(required),
                 placed=placed_n,
-                unplaced=count - placed_n,
+                unplaced=unplaced_n,
+                pass_count=slot_counts.get(inspiration, 0),
             )
         )
 
@@ -363,13 +513,16 @@ def place_at_cell(data: PlaceAtCellRequest, db: Session = Depends(get_db)):
     )
 
     if slot and slot.inspiration != data.inspiration:
-        raise HTTPException(
-            400,
-            (
-                f"Rummet har redan «{slot.inspiration}» detta pass. "
-                "Välj annat rum eller pass."
-            ),
-        )
+        if len(slot.placements) == 0:
+            slot.inspiration = data.inspiration
+        else:
+            raise HTTPException(
+                400,
+                (
+                    f"Rummet har redan «{slot.inspiration}» detta pass. "
+                    "Välj annat rum eller pass."
+                ),
+            )
 
     if not slot:
         slot = SessionSlot(
@@ -528,9 +681,21 @@ def auto_solve(data: AutoSolveRequest, db: Session = Depends(get_db)):
         ]
         rooms = [RoomRef(r.id, r.name, r.capacity) for r in rooms_orm]
         slots: list = []
-        result = solve_auto_placement(students, rooms, slots)
+        result = solve_auto_placement(
+            students,
+            rooms,
+            slots,
+            minimize_sessions_per_inspirator=data.minimize_sessions_per_inspirator,
+            min_students_threshold=data.min_students_threshold,
+        )
     else:
-        students, slots, result = run_on_orm(students_orm, rooms_orm, slots_orm)
+        students, slots, result = run_on_orm(
+            students_orm,
+            rooms_orm,
+            slots_orm,
+            minimize_sessions_per_inspirator=data.minimize_sessions_per_inspirator,
+            min_students_threshold=data.min_students_threshold,
+        )
 
     if not data.dry_run:
         apply_solution_to_db(db, students_orm, slots)
@@ -555,6 +720,7 @@ def auto_solve(data: AutoSolveRequest, db: Session = Depends(get_db)):
         by_choice_field=result.by_choice_field,
         summary=result.summary,
         dry_run=data.dry_run,
+        suppressed_inspirators=result.suppressed_inspirators,
     )
 
 

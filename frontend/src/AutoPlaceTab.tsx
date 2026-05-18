@@ -9,29 +9,87 @@ const CHOICE_LABELS: Record<string, string> = {
   reserve: "Reserv",
 };
 
+function formatSessionCount(n: number): string {
+  if (n === 0) return "inga nya sessioner";
+  if (n === 1) return "1 ny session";
+  return `${n} nya sessioner`;
+}
+
+function formatUnplacedStatus(unplaced_count: number): string {
+  if (unplaced_count === 0) {
+    return "Alla val 1–3 får ett pass (reserv placeras inte automatiskt).";
+  }
+  if (unplaced_count === 1) {
+    return "1 val 1–3 saknar fortfarande pass.";
+  }
+  return `${unplaced_count} val 1–3 saknar fortfarande pass.`;
+}
+
+function formatAutoPlaceToast(result: AutoSolveResult, phase: "preview" | "apply"): string {
+  const { placed_new, slots_created, unplaced_count } = result;
+  const sessions = formatSessionCount(slots_created);
+  const status = formatUnplacedStatus(unplaced_count);
+
+  if (phase === "preview") {
+    const vals =
+      placed_new === 0
+        ? "Inga nya val att placera"
+        : placed_new === 1
+          ? "1 val skulle placeras"
+          : `${placed_new} val skulle placeras`;
+    return (
+      `Förhandsgranskning klar: ${vals}, ${sessions}. ` +
+      `${status} Inget är sparat – klicka Verkställ placering om du vill spara.`
+    );
+  }
+
+  const vals =
+    placed_new === 0
+      ? "Inga nya val placerade"
+      : placed_new === 1
+        ? "1 val placerades"
+        : `${placed_new} val placerades`;
+  return `Placering sparad: ${vals}, ${sessions}. ${status}`;
+}
+
 type Props = {
   studentCount: number;
   roomCount: number;
+  minStudentsThreshold: number;
+  onMinStudentsThresholdChange: (value: number) => void;
   onDone: () => Promise<void>;
   showMsg: (type: ToastType, text: string) => void;
 };
 
-export function AutoPlaceTab({ studentCount, roomCount, onDone, showMsg }: Props) {
+export function AutoPlaceTab({
+  studentCount,
+  roomCount,
+  minStudentsThreshold,
+  onMinStudentsThresholdChange,
+  onDone,
+  showMsg,
+}: Props) {
   const [mode, setMode] = useState<"fill" | "replace">("fill");
+  const [minimizeSessionsPerInspirator, setMinimizeSessionsPerInspirator] = useState(false);
   const [preview, setPreview] = useState<AutoSolveResult | null>(null);
   const [busy, setBusy] = useState(false);
 
   const run = async (dryRun: boolean) => {
     setBusy(true);
     try {
-      const result = await api.placements.autoSolve({ mode, dry_run: dryRun });
+      const result = await api.placements.autoSolve({
+        mode,
+        dry_run: dryRun,
+        minimize_sessions_per_inspirator: minimizeSessionsPerInspirator,
+        min_students_threshold: minStudentsThreshold,
+      });
       if (dryRun) {
         setPreview(result);
-        showMsg("success", result.summary);
+        showMsg("success", formatAutoPlaceToast(result, "preview"));
       } else {
         setPreview(result);
         await onDone();
-        showMsg("success", `Klart. ${result.summary}`);
+        showMsg("success", formatAutoPlaceToast(result, "apply"));
       }
     } catch (e) {
       showMsg("error", e instanceof Error ? e.message : "Automatisk placering misslyckades");
@@ -78,6 +136,40 @@ export function AutoPlaceTab({ studentCount, roomCount, onDone, showMsg }: Props
         </label>
       </fieldset>
 
+      <fieldset className="auto-place-options">
+        <legend>Alternativ</legend>
+        <label>
+          <input
+            type="checkbox"
+            checked={minimizeSessionsPerInspirator}
+            onChange={(e) => setMinimizeSessionsPerInspirator(e.target.checked)}
+            disabled={busy}
+          />
+          Prioritera få sessioner per inspiratör (samlar grupper i samma rum/pass)
+        </label>
+        <p className="auto-place-option-hint">
+          När kryssat fylls befintliga sessioner först och större rum väljs vid nya grupper, så
+          färre parallella träffar skapas för samma inspiratör.
+        </p>
+        <label className="auto-place-threshold">
+          <span>Tröskel: min antal elever per inspiratör (val 1–3)</span>
+          <input
+            type="number"
+            min={0}
+            max={500}
+            value={minStudentsThreshold}
+            onChange={(e) =>
+              onMinStudentsThresholdChange(parseInt(e.target.value, 10) || 0)
+            }
+            disabled={busy}
+          />
+        </label>
+        <p className="auto-place-option-hint">
+          <strong>0 = av.</strong> Inspiratörer med högst så många elever döljs i Placering och
+          berörda elever styrs mot reserv vid auto-placering (en reserv per elev).
+        </p>
+      </fieldset>
+
       <div className="auto-place-actions">
         <button type="button" className="primary" disabled={busy || roomCount === 0} onClick={() => run(true)}>
           Förhandsgranska
@@ -111,9 +203,17 @@ export function AutoPlaceTab({ studentCount, roomCount, onDone, showMsg }: Props
         <div className="auto-place-result">
           <h3>{preview.dry_run ? "Förhandsgranskning" : "Resultat"}</h3>
           <p>{preview.summary}</p>
+          {preview.suppressed_inspirators.length > 0 && (
+            <p className="auto-place-suppressed">
+              <strong>{preview.suppressed_inspirators.length}</strong> inspiratör(er) under
+              tröskel (dolda i Placering, elever mot reserv):{" "}
+              {preview.suppressed_inspirators.join("; ")}
+            </p>
+          )}
           <ul className="auto-place-stats">
             <li>
-              <strong>{preview.placed_new}</strong> nya pass
+              <strong>{preview.placed_new}</strong>{" "}
+              {preview.placed_new === 1 ? "nytt val" : "nya val"}
             </li>
             <li>
               <strong>{preview.slots_created}</strong> nya sessioner (rum + pass)
