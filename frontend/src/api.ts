@@ -35,6 +35,7 @@ export type AutoSolveResult = {
   unplaced_count: number;
   unplaced_sample: {
     student_id: number;
+    student_name: string;
     inspiration: string;
     choice_field: string;
     rank: number;
@@ -109,14 +110,17 @@ export const api = {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(data),
       }),
-    delete: (id: number) =>
-      fetch(`${API}/rooms/${id}`, { method: "DELETE", ...fetchOpts }).then((r) => {
-        if (r.status === 401) {
-          onUnauthorized?.();
-          throw new AuthError();
-        }
-        if (!r.ok) throw new Error("Kunde inte ta bort rum");
-      }),
+    delete: async (id: number) => {
+      const res = await fetch(`${API}/rooms/${id}`, { method: "DELETE", ...fetchOpts });
+      if (res.status === 401) {
+        onUnauthorized?.();
+        throw new AuthError();
+      }
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ detail: res.statusText }));
+        throw new Error(err.detail || "Kunde inte ta bort rum");
+      }
+    },
   },
   students: {
     list: () => json<Student[]>(`${API}/students`),
@@ -216,6 +220,7 @@ export const api = {
       dry_run: boolean;
       minimize_sessions_per_inspirator?: boolean;
       min_students_threshold?: number;
+      try_reserve_for_unplaced?: boolean;
     }) =>
       json<AutoSolveResult>(`${API}/placements/auto-solve`, {
         method: "POST",

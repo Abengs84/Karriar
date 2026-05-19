@@ -4,12 +4,13 @@ Webbverktyg för att hantera rum, importera elevval från Excel (Google Form-exp
 
 ## Funktioner
 
-- **Rum** – Academill-rum från [guide.abo.fi](https://guide.abo.fi/bookings/Academill?locale=sv) läggs in automatiskt vid start (seminarierum ~25 platser, grupprum ~13, mötesrum ~14). Du kan lägga till fler eller ta bort under fliken Rum.
+- **Rum** – Bekräftade Karriär-rum läggs in automatiskt vid start med uppskattad kapacitet per lokaltyp. Kapacitet synkas vid omstart; du kan också justera under fliken Rum.
 - **Excel-import** – kolumner A–H enligt Vi7-formuläret; dubbletter hoppas över vid omimport
 - **Statistik** – antal elever per inspirationsträff och pass (val 1–3)
 - **Placering** – dra grupper (samma inspiratör) till sessioner (rum + pass + inspirationsträff)
-- **Flera pass** – samma inspiratör kan ligga i flera sessioner om rummet är fullt
-- **Pass 2a/2b** – lunchspår sätts automatiskt vid placering i pass 2a eller 2b
+- **Max tre tidspass per inspiratör** – pass 1, pass 2 och pass 3
+- **Pass 2 = antingen 2a eller 2b** – samma inspiratör kan inte ligga på båda lunchspåren; systemet väljer spår vid första placering
+- **Pass 2a/2b** – samma tidspass uppdelat; lunchspår sätts automatiskt vid placering
 - **PDF** – en fil per skola, fyra scheman per sida (2×2)
 
 ## Starta med Docker
@@ -86,7 +87,7 @@ Exempel på val: `Ekonom – Cecilia Ruotsala`
 2. Importera Excel en gång.
 3. Under **Statistik** – se hur många unika elever som valt varje inspiratör (kolumn E–G/H).
 4. Under **Placering** – skapa session (rum + **tidspass** + inspiratör) och dra gruppen dit.
-5. Om fler elever än kapacitet: skapa **ny session** med samma inspiratör i ett **annat tidspass**.
+5. Om fler elever än kapacitet: använd ett **annat tidspass** (högst tre: pass 1, 2 och 3) – inte ett annat rum samma tid.
 6. Kolumn E/F/G är önskemål – inte kopplade till pass 1/2/3 i schemat.
 7. Ladda ner PDF per skola.
 

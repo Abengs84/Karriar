@@ -26,10 +26,15 @@ from app.helpers import (
     purge_empty_session_slots,
     collect_all_inspirations,
     has_placement_at_pass,
+    inspirator_pass2_variant_locked,
     is_placed_with_inspirator,
     schedule_pass_key,
+    schedule_pass_keys_from_types,
     student_chose,
     student_chose_required,
+    student_has_full_schedule,
+    would_conflict_inspirator_pass2,
+    would_exceed_inspirator_pass_limit,
 )
 from app.auto_placer import (
     RoomRef,
@@ -278,6 +283,105 @@ def delete_room(room_id: int, db: Session = Depends(get_db)):
     return {"ok": True}
 
 
+def _inspirator_pass_types(
+    db: Session, inspiration: str, *, exclude_slot_id: int | None = None
+) -> list[str]:
+    q = db.query(SessionSlot.pass_type).filter(
+        SessionSlot.inspiration == inspiration
+    )
+    if exclude_slot_id is not None:
+        q = q.filter(SessionSlot.id != exclude_slot_id)
+    return [row[0] for row in q.all()]
+
+
+def _global_pass2_placement_counts(db: Session) -> tuple[int, int]:
+    n2a = (
+        db.query(Placement)
+        .join(SessionSlot)
+        .filter(SessionSlot.pass_type == "pass2a")
+        .count()
+    )
+    n2b = (
+        db.query(Placement)
+        .join(SessionSlot)
+        .filter(SessionSlot.pass_type == "pass2b")
+        .count()
+    )
+    return n2a, n2b
+
+
+def _resolve_inspirator_pass2_placement(db: Session, inspiration: str) -> str:
+    """Välj pass2a eller pass2b för inspiratör (låst om redan satt)."""
+    pass_types = _inspirator_pass_types(db, inspiration)
+    locked = inspirator_pass2_variant_locked(pass_types)
+    if locked:
+        return locked
+    n2a, n2b = _global_pass2_placement_counts(db)
+    return "pass2a" if n2a <= n2b else "pass2b"
+
+
+def _ensure_inspirator_not_double_booked(
+    db: Session,
+    inspiration: str,
+    pass_type: str,
+    room_id: int,
+    *,
+    exclude_slot_id: int | None = None,
+) -> None:
+    q = (
+        db.query(SessionSlot)
+        .options(joinedload(SessionSlot.room))
+        .filter(
+            SessionSlot.inspiration == inspiration,
+            SessionSlot.pass_type == pass_type,
+            SessionSlot.room_id != room_id,
+        )
+    )
+    if exclude_slot_id is not None:
+        q = q.filter(SessionSlot.id != exclude_slot_id)
+    other = q.first()
+    if other:
+        room_name = other.room.name if other.room else f"rum {other.room_id}"
+        raise HTTPException(
+            400,
+            (
+                f"«{inspiration}» har redan ett pass i {room_name} denna tid. "
+                "En inspiratör kan bara vara på ett ställe åt gången."
+            ),
+        )
+
+
+def _ensure_inspirator_pass_allowed(
+    db: Session,
+    inspiration: str,
+    pass_type: str,
+    *,
+    exclude_slot_id: int | None = None,
+) -> None:
+    pass_types = _inspirator_pass_types(
+        db, inspiration, exclude_slot_id=exclude_slot_id
+    )
+    keys = schedule_pass_keys_from_types(pass_types)
+    if would_exceed_inspirator_pass_limit(keys, pass_type):
+        raise HTTPException(
+            400,
+            (
+                f"«{inspiration}» har redan tre tidspass (pass 1, pass 2 och pass 3). "
+                "Välj ett annat tidspass."
+            ),
+        )
+    if would_conflict_inspirator_pass2(pass_types, pass_type):
+        locked = inspirator_pass2_variant_locked(pass_types)
+        track = "2a" if locked == "pass2a" else "2b"
+        raise HTTPException(
+            400,
+            (
+                f"«{inspiration}» har redan pass {track}. "
+                "En inspiratör kan bara ligga på antingen 2a eller 2b, inte båda."
+            ),
+        )
+
+
 # --- Session slots ---
 @app.get("/api/session-slots", response_model=list[SessionSlotOut])
 def list_session_slots(pass_type: str | None = None, db: Session = Depends(get_db)):
@@ -295,14 +399,21 @@ def list_session_slots(pass_type: str | None = None, db: Session = Depends(get_d
 
 @app.post("/api/session-slots", response_model=SessionSlotOut)
 def create_session_slot(data: SessionSlotCreate, db: Session = Depends(get_db)):
-    if data.pass_type not in ("pass1", "pass2a", "pass2b", "pass3"):
+    if data.pass_type not in ("pass1", "pass2", "pass2a", "pass2b", "pass3"):
         raise HTTPException(400, "Ogiltig passtyp")
+    pass_type = data.pass_type
+    if pass_type == "pass2":
+        pass_type = _resolve_inspirator_pass2_placement(db, data.inspiration)
     room = db.query(Room).filter(Room.id == data.room_id).first()
     if not room:
         raise HTTPException(404, "Rummet hittades inte")
+    _ensure_inspirator_not_double_booked(
+        db, data.inspiration, pass_type, data.room_id
+    )
+    _ensure_inspirator_pass_allowed(db, data.inspiration, pass_type)
     slot = SessionSlot(
         room_id=data.room_id,
-        pass_type=data.pass_type,
+        pass_type=pass_type,
         inspiration=data.inspiration,
     )
     db.add(slot)
@@ -408,11 +519,11 @@ def inspirator_stats(db: Session = Depends(get_db)):
         .all()
     )
     inspirations = collect_all_inspirations(students)
-    slot_counts = dict(
-        db.query(SessionSlot.inspiration, func.count(SessionSlot.id))
-        .group_by(SessionSlot.inspiration)
-        .all()
-    )
+    pass_types_by_insp: dict[str, list[str]] = {}
+    for inspiration, pass_type in db.query(
+        SessionSlot.inspiration, SessionSlot.pass_type
+    ).all():
+        pass_types_by_insp.setdefault(inspiration, []).append(pass_type)
     result = []
 
     for inspiration in sorted(inspirations):
@@ -420,14 +531,23 @@ def inspirator_stats(db: Session = Depends(get_db)):
         placed_n = sum(
             1 for s in required if is_placed_with_inspirator(s, inspiration)
         )
-        unplaced_n = len(required) - placed_n
+        unplaced_n = sum(
+            1
+            for s in required
+            if not is_placed_with_inspirator(s, inspiration)
+            and not student_has_full_schedule(s)
+        )
         result.append(
             InspiratorStat(
                 inspiration=inspiration,
                 count=len(required),
                 placed=placed_n,
                 unplaced=unplaced_n,
-                pass_count=slot_counts.get(inspiration, 0),
+                pass_count=len(
+                    schedule_pass_keys_from_types(
+                        pass_types_by_insp.get(inspiration, [])
+                    )
+                ),
             )
         )
 
@@ -496,8 +616,11 @@ def _place_students_in_slot(
 # --- Placements ---
 @app.post("/api/placements/at-cell")
 def place_at_cell(data: PlaceAtCellRequest, db: Session = Depends(get_db)):
-    if data.pass_type not in ("pass1", "pass2a", "pass2b", "pass3"):
+    if data.pass_type not in ("pass1", "pass2", "pass2a", "pass2b", "pass3"):
         raise HTTPException(400, "Ogiltig passtyp")
+    pass_type = data.pass_type
+    if pass_type == "pass2":
+        pass_type = _resolve_inspirator_pass2_placement(db, data.inspiration)
     room = db.query(Room).filter(Room.id == data.room_id).first()
     if not room:
         raise HTTPException(404, "Rummet hittades inte")
@@ -507,13 +630,26 @@ def place_at_cell(data: PlaceAtCellRequest, db: Session = Depends(get_db)):
         .options(joinedload(SessionSlot.room), joinedload(SessionSlot.placements))
         .filter(
             SessionSlot.room_id == data.room_id,
-            SessionSlot.pass_type == data.pass_type,
+            SessionSlot.pass_type == pass_type,
         )
         .first()
     )
 
     if slot and slot.inspiration != data.inspiration:
         if len(slot.placements) == 0:
+            _ensure_inspirator_not_double_booked(
+                db,
+                data.inspiration,
+                pass_type,
+                data.room_id,
+                exclude_slot_id=slot.id,
+            )
+            _ensure_inspirator_pass_allowed(
+                db,
+                data.inspiration,
+                pass_type,
+                exclude_slot_id=slot.id,
+            )
             slot.inspiration = data.inspiration
         else:
             raise HTTPException(
@@ -525,14 +661,22 @@ def place_at_cell(data: PlaceAtCellRequest, db: Session = Depends(get_db)):
             )
 
     if not slot:
+        _ensure_inspirator_not_double_booked(
+            db, data.inspiration, pass_type, data.room_id
+        )
+        _ensure_inspirator_pass_allowed(db, data.inspiration, pass_type)
         slot = SessionSlot(
             room_id=data.room_id,
-            pass_type=data.pass_type,
+            pass_type=pass_type,
             inspiration=data.inspiration,
         )
         db.add(slot)
         db.flush()
         slot.room = room
+    else:
+        _ensure_inspirator_not_double_booked(
+            db, data.inspiration, pass_type, data.room_id, exclude_slot_id=slot.id
+        )
 
     result = _place_students_in_slot(db, slot, data.student_ids)
     db.flush()
@@ -687,6 +831,7 @@ def auto_solve(data: AutoSolveRequest, db: Session = Depends(get_db)):
             slots,
             minimize_sessions_per_inspirator=data.minimize_sessions_per_inspirator,
             min_students_threshold=data.min_students_threshold,
+            try_reserve_for_unplaced=data.try_reserve_for_unplaced,
         )
     else:
         students, slots, result = run_on_orm(
@@ -695,15 +840,22 @@ def auto_solve(data: AutoSolveRequest, db: Session = Depends(get_db)):
             slots_orm,
             minimize_sessions_per_inspirator=data.minimize_sessions_per_inspirator,
             min_students_threshold=data.min_students_threshold,
+            try_reserve_for_unplaced=data.try_reserve_for_unplaced,
         )
 
     if not data.dry_run:
         apply_solution_to_db(db, students_orm, slots)
         db.commit()
 
+    student_by_id = {s.id: s for s in students_orm}
     sample = [
         UnplacedNeedOut(
             student_id=n.student_id,
+            student_name=(
+                f"{s.first_name} {s.last_name}"
+                if (s := student_by_id.get(n.student_id))
+                else str(n.student_id)
+            ),
             inspiration=n.inspiration,
             choice_field=n.field,
             rank=n.rank,

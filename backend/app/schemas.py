@@ -118,10 +118,12 @@ class AutoSolveRequest(BaseModel):
     dry_run: bool = True
     minimize_sessions_per_inspirator: bool = False
     min_students_threshold: int = Field(default=0, ge=0, le=500)
+    try_reserve_for_unplaced: bool = False
 
 
 class UnplacedNeedOut(BaseModel):
     student_id: int
+    student_name: str
     inspiration: str
     choice_field: str
     rank: int

@@ -32,11 +32,14 @@ Använd alltid förhandsgranskning först.
 
 ## Regler (samma som vid manuell placering)
 
-1. **Ett pass per tid** – Pass 2a och 2b räknas som samma tid (`pass2`). Eleven kan bara ha ett av dem.
-2. **En gång per inspiratör** – Eleven kan bara träffa varje inspiratör en gång under dagen.
-3. **Val krävs** – Inspiratören måste finnas bland elevens val 1–3 eller reserv.
-4. **Rumskapacitet** – Varje session (rum + passtyp + inspiratör) har högst `capacity` elever.
-5. **Ett inspiratörnamn per ruta** – I ett givet rum och passtyp (t.ex. A0208 + pass 1) kan bara **en** inspiratör ligga. Systemet skapar fler sessioner i andra rum om gruppen inte får plats.
+1. **Dubblett i val 1–3** – Om samma inspiratör står på flera val (t.ex. val 1 och val 3) räknas bara det första; det senare ersätts av **reserv** om eleven har reservval (annars ignoreras dubbletten).
+2. **Ett pass per tid** – Pass 2a och 2b räknas som samma tid (`pass2`). Eleven kan bara ha ett av dem.
+3. **En gång per inspiratör** – Eleven kan bara träffa varje inspiratör en gång under dagen.
+4. **Val krävs** – Inspiratören måste finnas bland elevens val 1–3 eller reserv.
+5. **Rumskapacitet** – Varje session (rum + passtyp + inspiratör) har högst `capacity` elever.
+6. **Max tre tidspass per inspiratör** – Pass 1, pass 2 och pass 3. Pass 2 = antingen 2a eller 2b (lunchspår låses vid första session).
+7. **Ett rum per pass och inspiratör** – Samma inspiratör kan inte ligga i två rum samtidigt (samma passtyp). Om rummet är fullt: använd ett **annat tidspass**, inte ett annat rum samma tid.
+8. **Ett inspiratörnamn per ruta** – I ett givet rum och passtyp kan bara **en** inspiratör ligga.
 
 ## Hur algoritmen tänker
 
@@ -79,6 +82,15 @@ Pass 2 kan ligga i kolumn **pass 2a** eller **pass 2b** – olika lunchtider. Re
 
 Efter huvudloopen körs några extra varv som försöker placera kvarvarande behov på **vilken** lediga tid som helst (fortfarande med samma regler).
 
+### Steg 4b – Reserv för elever som saknar pass (valfritt)
+
+Om **Försök reserv för elever som saknar pass** är ikryssat: efter förbättringsvarven försöker systemet placera **reserv** för elever som fortfarande har kvarvarande val 1–3:
+
+1. På ett **ledigt** tidspass om reserv har plats där.
+2. Genom att **flytta** ett befintligt pass till en annan tid där samma inspiratör har lediga platser, och sedan lägga reserv på det frigjorda passet (t.ex. flytta val 1 från pass 2 till pass 3 och lägga reserv på pass 2).
+
+Eleven måste ha reservval. De räknas inte längre som «val 1–3 utan pass» i resultatet om reserv lyckades.
+
 ### Steg 5 – Rum och sessioner
 
 - Finns redan en session med samma inspiratör + passtyp och lediga platser → eleven läggs där.
@@ -96,7 +108,7 @@ Efter huvudloopen körs några extra varv som försöker placera kvarvarande beh
 | **Rum upptagna** | Alla rum har redan en annan inspiratör den tiden och det finns inget fler rum. |
 | **Befintliga placeringar** | I läget *Fyll tomma* kan tidigare manuella val blockera bättre kombinationer. |
 
-Kvarvarande **val 1–3** utan pass visas i förhandsgranskningen (elev-id, inspiratör, valtyp). Reserv visas inte där.
+Kvarvarande **val 1–3** utan **ledigt tidspass** visas i förhandsgranskningen (elevnamn, inspiratör, valtyp). Elever som redan har tre pass räknas inte, även om ett lägre prioriterat val ersatts av ett annat (t.ex. val 1 på både pass 1 och 3). Reserv visas inte där.
 
 I fliken **Placering** visas bara oplacerade grupper för **val 1–3**. Elever som bara har kvar sitt reservval syns inte i vänsterkolumnen (reserv kan fortfarande sättas under **Elever**).
 
@@ -114,7 +126,8 @@ I fliken **Placering** visas bara oplacerade grupper för **val 1–3**. Elever 
 POST /api/placements/auto-solve
 {
   "mode": "fill",
-  "dry_run": true
+  "dry_run": true,
+  "try_reserve_for_unplaced": true
 }
 ```
 

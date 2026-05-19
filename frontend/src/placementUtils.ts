@@ -1,6 +1,7 @@
-import { Placement, Student } from "./api";
+import { Placement, SessionSlot, Student } from "./api";
 
 const PASS2 = new Set(["pass2a", "pass2b"]);
+export const PASS2_VARIANTS = ["pass2a", "pass2b"] as const;
 
 export function schedulePassKey(passType: string): string {
   return PASS2.has(passType) ? "pass2" : passType;
@@ -12,7 +13,24 @@ export function studentChoices(s: Student): string[] {
 
 /** Val 1–3 (reserv räknas inte som oplacerad grupp i schemat). */
 export function studentRequiredChoices(s: Student): string[] {
-  return [s.choice1, s.choice2, s.choice3].filter(Boolean) as string[];
+  const seen = new Set<string>();
+  const out: string[] = [];
+  let reserveSubstituteUsed = false;
+  for (const field of ["choice1", "choice2", "choice3"] as const) {
+    const val = s[field];
+    if (!val) continue;
+    if (seen.has(val)) {
+      if (!reserveSubstituteUsed && s.reserve && !seen.has(s.reserve)) {
+        out.push(s.reserve);
+        seen.add(s.reserve);
+        reserveSubstituteUsed = true;
+      }
+      continue;
+    }
+    seen.add(val);
+    out.push(val);
+  }
+  return out;
 }
 
 /** Elever som valt inspiratören i val 1–3 (samma logik som statistik-API). */
@@ -66,7 +84,12 @@ export function effectiveRequiredChoices(
   let reserveUsed = false;
   for (const c of studentRequiredChoices(s)) {
     if (suppressed.has(c)) {
-      if (!reserveUsed && s.reserve && !suppressed.has(s.reserve)) {
+      if (
+        !reserveUsed &&
+        s.reserve &&
+        !suppressed.has(s.reserve) &&
+        !out.includes(s.reserve)
+      ) {
         out.push(s.reserve);
         reserveUsed = true;
       }
@@ -122,10 +145,8 @@ export function unplacedByInspirator(
   const suppressed = getSuppressedInspirations(students, minStudentsThreshold);
   const map = new Map<string, Student[]>();
   for (const inspiration of collectEffectiveInspirations(students, suppressed)) {
-    const group = students.filter(
-      (s) =>
-        studentChoseForPlacement(s, inspiration, suppressed) &&
-        !isPlacedWithInspirator(s, inspiration)
+    const group = students.filter((s) =>
+      isUnplacedForInspirator(s, inspiration, suppressed)
     );
     if (group.length > 0) {
       map.set(inspiration, group);
@@ -147,11 +168,90 @@ export function hasPlacementAtSchedulePass(student: Student, passType: string): 
   return student.placements.some((p) => p.pass_type && schedulePassKey(p.pass_type) === key);
 }
 
+/** Eleven har redan pass 1, 2 och 3 – inget ledigt tidspass kvar. */
+export function studentHasFullSchedule(student: Student): boolean {
+  return (
+    hasPlacementAtSchedulePass(student, "pass1") &&
+    hasPlacementAtSchedulePass(student, "pass2") &&
+    hasPlacementAtSchedulePass(student, "pass3")
+  );
+}
+
+/** Ska visas som oplacerad för inspiratören (val 1–3, ej träffad, har ledigt pass). */
+export function isUnplacedForInspirator(
+  student: Student,
+  inspiration: string,
+  suppressed?: Set<string>
+): boolean {
+  if (!studentChoseForPlacement(student, inspiration, suppressed)) return false;
+  if (isPlacedWithInspirator(student, inspiration)) return false;
+  if (studentHasFullSchedule(student)) return false;
+  return true;
+}
+
+/** Vilket lunchspår inspiratören redan använder (pass2a eller pass2b). */
+export function inspiratorPass2VariantLocked(
+  slots: SessionSlot[],
+  inspiration: string
+): "pass2a" | "pass2b" | null {
+  const types = slots
+    .filter((s) => s.inspiration === inspiration)
+    .map((s) => s.pass_type);
+  if (types.includes("pass2a")) return "pass2a";
+  if (types.includes("pass2b")) return "pass2b";
+  return null;
+}
+
+/** Välj pass2a eller pass2b vid placering (samma logik som backend). */
+export function resolveInspiratorPass2Variant(
+  slots: SessionSlot[],
+  inspiration: string
+): "pass2a" | "pass2b" {
+  const locked = inspiratorPass2VariantLocked(slots, inspiration);
+  if (locked) return locked;
+  let n2a = 0;
+  let n2b = 0;
+  for (const s of slots) {
+    if (s.pass_type === "pass2a") n2a += s.placed_count;
+    if (s.pass_type === "pass2b") n2b += s.placed_count;
+  }
+  return n2a <= n2b ? "pass2a" : "pass2b";
+}
+
+/** Inspiratörens session samma pass i annat rum (dubbelbokning). */
+export function inspiratorBookedElsewhereAtPass(
+  slots: SessionSlot[],
+  inspiration: string,
+  passType: string,
+  roomId: number
+): SessionSlot | undefined {
+  const actualPass = resolvePlacementPassType(passType, slots, inspiration);
+  return slots.find(
+    (s) =>
+      s.inspiration === inspiration &&
+      s.pass_type === actualPass &&
+      s.room_id !== roomId
+  );
+}
+
+/** Översätt schemacell (pass2) till faktisk passtyp för API. */
+export function resolvePlacementPassType(
+  passType: string,
+  slots: SessionSlot[],
+  inspiration: string
+): string {
+  if (passType === "pass2") {
+    return resolveInspiratorPass2Variant(slots, inspiration);
+  }
+  return passType;
+}
+
 export type PlacementEligibility = {
   eligibleIds: number[];
   skip_already_at_pass: number;
   skip_already_with_inspirator: number;
   skip_not_chose: number;
+  inspirator_double_booked: boolean;
 };
 
 /** Delar upp elev-id:n efter samma regler som backend vid placering. */
@@ -159,13 +259,29 @@ export function splitStudentsForPlacement(
   students: Student[],
   studentIds: number[],
   inspiration: string,
-  passType: string
+  passType: string,
+  roomId?: number,
+  slots?: SessionSlot[]
 ): PlacementEligibility {
   const byId = new Map(students.map((s) => [s.id, s]));
   const eligibleIds: number[] = [];
   let skip_already_at_pass = 0;
   let skip_already_with_inspirator = 0;
   let skip_not_chose = 0;
+  const inspirator_double_booked =
+    roomId != null &&
+    slots != null &&
+    inspiratorBookedElsewhereAtPass(slots, inspiration, passType, roomId) != null;
+
+  if (inspirator_double_booked) {
+    return {
+      eligibleIds: [],
+      skip_already_at_pass: 0,
+      skip_already_with_inspirator: 0,
+      skip_not_chose: 0,
+      inspirator_double_booked: true,
+    };
+  }
 
   for (const id of studentIds) {
     const s = byId.get(id);
@@ -190,5 +306,6 @@ export function splitStudentsForPlacement(
     skip_already_at_pass,
     skip_already_with_inspirator,
     skip_not_chose,
+    inspirator_double_booked: false,
   };
 }

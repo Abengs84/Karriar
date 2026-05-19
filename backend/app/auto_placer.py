@@ -11,7 +11,13 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Literal
 
-from app.helpers import schedule_pass_key
+from app.helpers import (
+    can_add_inspirator_schedule_pass,
+    inspirator_pass2_variant_locked,
+    iter_required_choice_fields,
+    schedule_pass_key,
+    schedule_pass_keys_from_types,
+)
 
 SchedulePass = Literal["pass1", "pass2", "pass3"]
 PASS_ORDER: list[SchedulePass] = ["pass1", "pass2", "pass3"]
@@ -146,7 +152,15 @@ def _load_slot_from_orm(slot) -> SlotRef:
 
 
 def _student_required_inspirations(s: StudentRef) -> set[str]:
-    return {c for c in (s.choice1, s.choice2, s.choice3) if c}
+    return {insp for _, insp in iter_required_choice_fields(s)}
+
+
+def _base_required_choice_refs(s: StudentRef) -> list[ChoiceRef]:
+    """Val 1–3; dublett ersätts av reserv."""
+    return [
+        ChoiceRef(insp, CHOICE_RANK[field], field)
+        for field, insp in iter_required_choice_fields(s)
+    ]
 
 
 def _compute_suppressed(students: list[StudentRef], threshold: int) -> set[str]:
@@ -162,43 +176,58 @@ def _compute_suppressed(students: list[StudentRef], threshold: int) -> set[str]:
 def _effective_required_choices(
     s: StudentRef, suppressed: set[str]
 ) -> list[ChoiceRef]:
-    """Val 1–3; undertröskel-inspiratörer ersätts av reserv (en gång per elev)."""
+    """Val 1–3 (efter dedup); undertröskel-inspiratörer ersätts av reserv (en gång per elev)."""
     out: list[ChoiceRef] = []
     reserve_used = False
-    for field_name in ("choice1", "choice2", "choice3"):
-        val = getattr(s, field_name)
-        if not val:
-            continue
-        if val in suppressed:
+    in_out: set[str] = set()
+    for c in _base_required_choice_refs(s):
+        if c.inspiration in suppressed:
             if (
                 not reserve_used
                 and s.reserve
                 and s.reserve not in suppressed
+                and s.reserve not in in_out
             ):
                 out.append(ChoiceRef(s.reserve, CHOICE_RANK["reserve"], "reserve"))
                 reserve_used = True
+                in_out.add(s.reserve)
             continue
-        out.append(ChoiceRef(val, CHOICE_RANK[field_name], field_name))
+        out.append(c)
+        in_out.add(c.inspiration)
     return out
 
 
 def _required_choices(s: StudentRef, suppressed: set[str] | None = None) -> list[ChoiceRef]:
     if suppressed:
         return _effective_required_choices(s, suppressed)
-    return [c for c in _student_choices_list(s) if c.field != "reserve"]
+    return _base_required_choice_refs(s)
+
+
+def _student_has_full_schedule(s: StudentRef) -> bool:
+    """True om eleven redan har pass 1, 2 och 3 (inget ledigt tidspass kvar)."""
+    return all(s.has_pass(schedule_pass) for schedule_pass in PASS_ORDER)
 
 
 def _pending_needs(
     students: list[StudentRef], suppressed: set[str] | None = None
 ) -> list[UnplacedNeed]:
+    """Val 1–3 utan matchande placering och minst ett ledigt tidspass."""
     needs: list[UnplacedNeed] = []
     for s in students:
+        if _student_has_full_schedule(s):
+            continue
         for c in _required_choices(s, suppressed):
             if not s.has_inspirator(c.inspiration):
                 needs.append(
                     UnplacedNeed(s.id, c.inspiration, c.rank, c.field)
                 )
     return needs
+
+
+def _inspirator_schedule_pass_keys(slots: list[SlotRef], inspiration: str) -> set[str]:
+    return schedule_pass_keys_from_types(
+        [s.pass_type for s in slots if s.inspiration == inspiration]
+    )
 
 
 def _room_pass_occupant(slots: list[SlotRef]) -> dict[tuple[int, str], str]:
@@ -247,15 +276,15 @@ def _find_slot_for(
     minimize_sessions: bool = False,
     suppressed: set[str] | None = None,
 ) -> SlotRef | None:
-    candidates = [
-        s
-        for s in slots
-        if s.inspiration == inspiration
-        and s.pass_type == pass_type
-        and s.remaining > 0
+    existing_for_insp = [
+        s for s in slots if s.inspiration == inspiration and s.pass_type == pass_type
     ]
-    if candidates:
-        return _pick_existing_slot(candidates, minimize_sessions=minimize_sessions)
+    if existing_for_insp:
+        candidates = [s for s in existing_for_insp if s.remaining > 0]
+        if candidates:
+            return _pick_existing_slot(candidates, minimize_sessions=minimize_sessions)
+        # Redan bokad denna tid – inget andra rum (fysiskt omöjligt).
+        return None
 
     group_size = _estimate_group_size(students, inspiration, suppressed)
     occ = _room_pass_occupant(slots)
@@ -263,6 +292,7 @@ def _find_slot_for(
         ordered = sorted(rooms, key=lambda r: (-r.capacity, r.name))
     else:
         ordered = sorted(rooms, key=lambda r: (r.capacity, r.name))
+    insp_pass_keys = _inspirator_schedule_pass_keys(slots, inspiration)
     for min_capacity in (group_size, 1):
         for room in ordered:
             if room.capacity < min_capacity:
@@ -275,6 +305,8 @@ def _find_slot_for(
                 if existing.inspiration == inspiration and existing.remaining > 0:
                     return existing
                 continue
+            if not can_add_inspirator_schedule_pass(insp_pass_keys, pass_type):
+                continue
             new_slot = SlotRef(
                 id=None,
                 room_id=room.id,
@@ -284,6 +316,7 @@ def _find_slot_for(
             )
             slots.append(new_slot)
             occ[key] = inspiration
+            insp_pass_keys.add(schedule_pass_key(pass_type))
             return new_slot
     return None
 
@@ -325,6 +358,13 @@ def _pass2_lunch_counts(
     return len(ids_2a), len(ids_2b)
 
 
+def _inspirator_pass2_variant_locked(
+    slots: list[SlotRef], inspiration: str
+) -> str | None:
+    pass_types = [s.pass_type for s in slots if s.inspiration == inspiration]
+    return inspirator_pass2_variant_locked(pass_types)
+
+
 def _pick_pass2_variant(
     slots: list[SlotRef],
     rooms: list[RoomRef],
@@ -335,8 +375,11 @@ def _pick_pass2_variant(
     minimize_sessions: bool = False,
     suppressed: set[str] | None = None,
 ) -> str | None:
-    if student.lunch_track == "2a":
-        order: tuple[str, ...] = ("pass2a", "pass2b")
+    locked = _inspirator_pass2_variant_locked(slots, inspiration)
+    if locked:
+        order = (locked,)
+    elif student.lunch_track == "2a":
+        order = ("pass2a", "pass2b")
     elif student.lunch_track == "2b":
         order = ("pass2b", "pass2a")
     else:
@@ -459,6 +502,248 @@ def _best_choice_for_pass(
     return candidates[0]
 
 
+def _students_with_unplaced_required(
+    students: list[StudentRef], suppressed: set[str] | None = None
+) -> set[int]:
+    return {n.student_id for n in _pending_needs(students, suppressed)}
+
+
+def _snapshot_student_slots(
+    student: StudentRef, slots: list[SlotRef]
+) -> tuple[list[tuple[str, str]], str | None, dict[int, list[int]]]:
+    affected: dict[int, list[int]] = {}
+    for slot in slots:
+        if student.id in slot.student_ids:
+            affected[id(slot)] = list(slot.student_ids)
+    return (list(student.placements), student.lunch_track, affected)
+
+
+def _restore_student_slots(
+    student: StudentRef,
+    slots: list[SlotRef],
+    snap: tuple[list[tuple[str, str]], str | None, dict[int, list[int]]],
+) -> None:
+    placements, lunch_track, affected = snap
+    student.placements = placements
+    student.lunch_track = lunch_track
+    for slot in slots:
+        sid = id(slot)
+        if sid in affected:
+            slot.student_ids = affected[sid]
+
+
+def _inspiration_on_schedule_pass(
+    student: StudentRef, schedule_pass: SchedulePass
+) -> str | None:
+    key = "pass2" if schedule_pass == "pass2" else schedule_pass
+    for pt, insp in student.placements:
+        if schedule_pass_key(pt) == key:
+            return insp
+    return None
+
+
+def _unassign_at_schedule_pass(
+    student: StudentRef, slots: list[SlotRef], schedule_pass: SchedulePass
+) -> tuple[str, str] | None:
+    key = "pass2" if schedule_pass == "pass2" else schedule_pass
+    remove_idx: int | None = None
+    removed_pt = ""
+    removed_insp = ""
+    for i, (pt, insp) in enumerate(student.placements):
+        if schedule_pass_key(pt) == key:
+            remove_idx = i
+            removed_pt, removed_insp = pt, insp
+            break
+    if remove_idx is None:
+        return None
+    for slot in slots:
+        if slot.pass_type == removed_pt and slot.inspiration == removed_insp:
+            if student.id in slot.student_ids:
+                slot.student_ids.remove(student.id)
+                break
+    del student.placements[remove_idx]
+    if removed_pt in PASS2_VARIANTS and not student.has_pass("pass2"):
+        student.lunch_track = None
+    return removed_pt, removed_insp
+
+
+def _try_place_reserve_on_schedule_pass(
+    student: StudentRef,
+    schedule_pass: SchedulePass,
+    slots: list[SlotRef],
+    rooms: list[RoomRef],
+    students: list[StudentRef],
+    *,
+    suppressed: set[str],
+    minimize_sessions: bool,
+) -> bool:
+    if not student.reserve or student.reserve in suppressed:
+        return False
+    if student.has_pass(schedule_pass) or student.has_inspirator(student.reserve):
+        return False
+    pass_type = _pick_pass_type(
+        slots,
+        rooms,
+        student.reserve,
+        schedule_pass,
+        student,
+        students,
+        minimize_sessions=minimize_sessions,
+        suppressed=suppressed,
+    )
+    if not pass_type or not _can_assign(student, student.reserve, pass_type):
+        return False
+    slot = _find_slot_for(
+        slots,
+        rooms,
+        student.reserve,
+        pass_type,
+        students,
+        minimize_sessions=minimize_sessions,
+        suppressed=suppressed,
+    )
+    return bool(slot and _assign(student, slot, pass_type))
+
+
+def _try_relocate_inspiration(
+    student: StudentRef,
+    inspiration: str,
+    slots: list[SlotRef],
+    rooms: list[RoomRef],
+    students: list[StudentRef],
+    *,
+    source_pass: SchedulePass,
+    suppressed: set[str],
+    minimize_sessions: bool,
+) -> bool:
+    for target_pass in PASS_ORDER:
+        if target_pass == source_pass or student.has_pass(target_pass):
+            continue
+        pass_type = _pick_pass_type(
+            slots,
+            rooms,
+            inspiration,
+            target_pass,
+            student,
+            students,
+            minimize_sessions=minimize_sessions,
+            suppressed=suppressed,
+        )
+        if not pass_type or not _can_assign(student, inspiration, pass_type):
+            continue
+        slot = _find_slot_for(
+            slots,
+            rooms,
+            inspiration,
+            pass_type,
+            students,
+            minimize_sessions=minimize_sessions,
+            suppressed=suppressed,
+        )
+        if slot and _assign(student, slot, pass_type):
+            return True
+    return False
+
+
+def _try_reserve_via_shuffle(
+    student: StudentRef,
+    slots: list[SlotRef],
+    rooms: list[RoomRef],
+    students: list[StudentRef],
+    *,
+    suppressed: set[str],
+    minimize_sessions: bool,
+) -> bool:
+    """Flytta ett befintligt pass för att frigöra tid åt reserv."""
+    occupied = [
+        sp
+        for sp in PASS_ORDER
+        if student.has_pass(sp)
+        and _inspiration_on_schedule_pass(student, sp) != student.reserve
+    ]
+    for source_pass in occupied:
+        inspiration = _inspiration_on_schedule_pass(student, source_pass)
+        if not inspiration:
+            continue
+        snap = _snapshot_student_slots(student, slots)
+        if not _unassign_at_schedule_pass(student, slots, source_pass):
+            continue
+        if not _try_relocate_inspiration(
+            student,
+            inspiration,
+            slots,
+            rooms,
+            students,
+            source_pass=source_pass,
+            suppressed=suppressed,
+            minimize_sessions=minimize_sessions,
+        ):
+            _restore_student_slots(student, slots, snap)
+            continue
+        if _try_place_reserve_on_schedule_pass(
+            student,
+            source_pass,
+            slots,
+            rooms,
+            students,
+            suppressed=suppressed,
+            minimize_sessions=minimize_sessions,
+        ):
+            return True
+        _restore_student_slots(student, slots, snap)
+    return False
+
+
+def _try_reserve_for_unplaced(
+    students: list[StudentRef],
+    slots: list[SlotRef],
+    rooms: list[RoomRef],
+    *,
+    suppressed: set[str],
+    minimize_sessions: bool = False,
+) -> set[int]:
+    """Placera reserv för elever med kvarvarande val 1–3 (ledigt pass eller omflyttning)."""
+    placed_ids: set[int] = set()
+    need_ids = _students_with_unplaced_required(students, suppressed)
+
+    for student in students:
+        if student.id not in need_ids:
+            continue
+        if not student.reserve or student.reserve in suppressed:
+            continue
+        if student.has_inspirator(student.reserve):
+            continue
+
+        placed = False
+        for schedule_pass in PASS_ORDER:
+            if _try_place_reserve_on_schedule_pass(
+                student,
+                schedule_pass,
+                slots,
+                rooms,
+                students,
+                suppressed=suppressed,
+                minimize_sessions=minimize_sessions,
+            ):
+                placed = True
+                break
+
+        if not placed:
+            placed = _try_reserve_via_shuffle(
+                student,
+                slots,
+                rooms,
+                students,
+                suppressed=suppressed,
+                minimize_sessions=minimize_sessions,
+            )
+
+        if placed:
+            placed_ids.add(student.id)
+
+    return placed_ids
+
+
 def _student_difficulty(
     student: StudentRef, suppressed: set[str] | None = None
 ) -> tuple[int, int]:
@@ -485,6 +770,7 @@ def solve_auto_placement(
     *,
     minimize_sessions_per_inspirator: bool = False,
     min_students_threshold: int = 0,
+    try_reserve_for_unplaced: bool = False,
 ) -> AutoSolveResult:
     """Kör heuristiken. Muterar students/slots in-place."""
     suppressed = _compute_suppressed(students, min_students_threshold)
@@ -559,6 +845,16 @@ def solve_auto_placement(
         if not improved:
             break
 
+    reserve_fallback_ids: set[int] = set()
+    if try_reserve_for_unplaced:
+        reserve_fallback_ids = _try_reserve_for_unplaced(
+            students,
+            slots,
+            rooms,
+            suppressed=suppressed,
+            minimize_sessions=minimize_sessions_per_inspirator,
+        )
+
     # Ta bort tomma celler som skapats under sökning men aldrig fylldes.
     slots[:] = [s for s in slots if len(s.student_ids) > 0]
 
@@ -566,6 +862,8 @@ def solve_auto_placement(
     placed_new = final_placed - initial_placed
     slots_created = len(slots) - initial_slot_count
     unplaced = _pending_needs(students, suppressed)
+    if reserve_fallback_ids:
+        unplaced = [n for n in unplaced if n.student_id not in reserve_fallback_ids]
     score = sum(
         c.rank
         for s in students
@@ -581,12 +879,25 @@ def solve_auto_placement(
                     break
 
     unplaced_count = len(unplaced)
+    reserve_count = len(reserve_fallback_ids)
     if unplaced_count == 0:
-        unplaced_part = "Alla val 1–3 har fått pass (reserv placeras inte automatiskt)."
+        if reserve_count:
+            unplaced_part = (
+                f"Alla val 1–3 har pass eller reserv ({reserve_count} på reserv)."
+            )
+        elif try_reserve_for_unplaced:
+            unplaced_part = "Alla val 1–3 har fått pass."
+        else:
+            unplaced_part = "Alla val 1–3 har fått pass (reserv placeras inte automatiskt)."
     elif unplaced_count == 1:
-        unplaced_part = "1 val (1–3) kvar utan pass."
+        unplaced_part = "1 val (1–3) kvar utan tidspass."
     else:
-        unplaced_part = f"{unplaced_count} val (1–3) kvar utan pass."
+        unplaced_part = f"{unplaced_count} val (1–3) kvar utan tidspass."
+    if reserve_count and unplaced_count > 0:
+        if reserve_count == 1:
+            unplaced_part += " 1 elev fick reserv på ledigt pass."
+        else:
+            unplaced_part += f" {reserve_count} elever fick reserv på ledigt pass."
     summary = (
         f"{placed_new} val placerade "
         f"(totalt {final_placed} pass på {len(students)} elever). "
@@ -615,6 +926,7 @@ def run_on_orm(
     *,
     minimize_sessions_per_inspirator: bool = False,
     min_students_threshold: int = 0,
+    try_reserve_for_unplaced: bool = False,
 ) -> tuple[list[StudentRef], list[SlotRef], AutoSolveResult]:
     students = [_load_student_from_orm(s) for s in students_orm]
     rooms = [RoomRef(r.id, r.name, r.capacity) for r in rooms_orm]
@@ -623,6 +935,7 @@ def run_on_orm(
         students, rooms, slots,
         minimize_sessions_per_inspirator=minimize_sessions_per_inspirator,
         min_students_threshold=min_students_threshold,
+        try_reserve_for_unplaced=try_reserve_for_unplaced,
     )
     return students, slots, result
 

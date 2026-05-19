@@ -18,17 +18,27 @@ import { createDropToCellAnimation } from "./dropAnimation";
 import { dndDebug, dndDebugGroup, dndDebugWarn, logDndDebugHelpOnce } from "./placementDndDebug";
 import {
   formatCapacityReturnWarning,
+  formatInspiratorDoubleBookedError,
   formatPartialIneligibleWarning,
   formatPlacementError,
   type PlacementResult,
 } from "./placementMessages";
+import {
+  inspiratorBookedElsewhereAtPass,
+  resolvePlacementPassType,
+  splitStudentsForPlacement,
+  unplacedByInspirator,
+} from "./placementUtils";
 import type { ToastType } from "./Toast";
-import { splitStudentsForPlacement, unplacedByInspirator } from "./placementUtils";
 
 const PASS_COLUMNS = [
   { value: "pass1", label: "Pass 1", time: "11:00–11:30" },
-  { value: "pass2a", label: "Pass 2a", time: "11:45–12:15" },
-  { value: "pass2b", label: "Pass 2b", time: "12:30–13:00" },
+  {
+    value: "pass2",
+    label: "Pass 2",
+    time: "11:45–12:15 / 12:30–13:00",
+    sub: "2a eller 2b (lunch)",
+  },
   { value: "pass3", label: "Pass 3", time: "13:15–13:45" },
 ] as const;
 
@@ -36,7 +46,7 @@ const DROP_ANIM_MS = 320;
 const POOL_DROP_ID = "pool-return";
 
 function parseCellFromOverId(overId: string): { roomId: number; passType: string } | null {
-  const m = overId.match(/^cell-(\d+)-(pass1|pass2a|pass2b|pass3)$/);
+  const m = overId.match(/^cell-(\d+)-(pass1|pass2|pass3)$/);
   if (!m) return null;
   return { roomId: Number(m[1]), passType: m[2] };
 }
@@ -181,19 +191,30 @@ export function PlacementBoard({
       if (placingLockRef.current || studentIds.length === 0) return;
 
       placingLockRef.current = true;
+      const apiPassType =
+        cell.passType === "pass2"
+          ? "pass2"
+          : resolvePlacementPassType(cell.passType, slots, inspiration);
       try {
-        dndDebug("API POST /placements/at-cell …", { count: studentIds.length });
+        dndDebug("API POST /placements/at-cell …", {
+          count: studentIds.length,
+          passType: apiPassType,
+        });
         const result = await api.placements.atCell(
           studentIds,
           cell.roomId,
-          cell.passType,
+          apiPassType,
           inspiration
         );
         dndDebug("API svar", { ...result });
 
         const { slots: freshSlots } = await onRefresh();
+        const resolvedPass =
+          cell.passType === "pass2"
+            ? resolvePlacementPassType("pass2", freshSlots, inspiration)
+            : cell.passType;
         const freshSlot = freshSlots.find(
-          (s) => s.room_id === cell.roomId && s.pass_type === cell.passType
+          (s) => s.room_id === cell.roomId && s.pass_type === resolvedPass
         );
 
         if (result.placed === 0) {
@@ -226,7 +247,7 @@ export function PlacementBoard({
         setConcealedInspiration(null);
       }
     },
-    [onRefresh, showMsg]
+    [onRefresh, showMsg, slots]
   );
 
   useEffect(() => {
@@ -365,15 +386,41 @@ export function PlacementBoard({
       students,
       group.studentIds,
       group.inspiration,
-      cell.passType
+      cell.passType,
+      cell.roomId,
+      slots
     );
+
+    if (split.inspirator_double_booked) {
+      const other = inspiratorBookedElsewhereAtPass(
+        slots,
+        group.inspiration,
+        cell.passType,
+        cell.roomId
+      );
+      const otherRoom = rooms.find((r) => r.id === other?.room_id);
+      showMsg(
+        "error",
+        formatInspiratorDoubleBookedError(
+          group.inspiration,
+          otherRoom?.name ?? "annat rum"
+        )
+      );
+      dropTargetRef.current = null;
+      lastOverLogRef.current = null;
+      setDragGroup(null);
+      setConcealedInspiration(null);
+      return;
+    }
+
     const conflictCount =
       split.skip_already_at_pass +
       split.skip_already_with_inspirator +
       split.skip_not_chose;
 
     const room = rooms.find((r) => r.id === cell.roomId);
-    const existingSlot = slotMap.get(`${cell.roomId}-${cell.passType}`);
+    const resolvedPass = resolvePlacementPassType(cell.passType, slots, group.inspiration);
+    const existingSlot = slotMap.get(`${cell.roomId}-${resolvedPass}`);
     const roomRemaining = room
       ? room.capacity - (existingSlot?.placed_count ?? 0)
       : split.eligibleIds.length;
@@ -462,7 +509,9 @@ export function PlacementBoard({
           <h3>Oplacerade grupper ({groups.length})</h3>
           <p className="pool-hint">
             Dra en grupp till en ruta i schemat. Släpp tillbaka här för att ångra. Varje elev kan
-            bara ha ett pass per tid.
+            bara ha ett pass per tid. Varje inspiratör kan ligga på högst tre tidspass (pass 1, 2
+            och 3) och väljer antingen lunch 2a eller 2b – inte båda. Elever som redan har tre pass
+            (t.ex. via reserv eller annat val) visas inte här.
           </p>
           {minStudentsThreshold > 0 && (
             <p className="pool-hint pool-hint-threshold">
@@ -502,6 +551,9 @@ export function PlacementBoard({
                       <th key={p.value} className="pass-header">
                         <span className="pass-label">{p.label}</span>
                         <span className="pass-time">{p.time}</span>
+                        {"sub" in p && p.sub ? (
+                          <span className="pass-sub">{p.sub}</span>
+                        ) : null}
                       </th>
                     ))}
                   </tr>
@@ -515,18 +567,35 @@ export function PlacementBoard({
                       </th>
                       {PASS_COLUMNS.map((p) => (
                         <td key={p.value}>
-                          <GridCell
-                            room={room}
-                            passType={p.value}
-                            slot={slotMap.get(`${room.id}-${p.value}`)}
-                            students={students}
-                            dragGroup={dragGroup}
-                            onContextMenuSlot={(e, slot) => {
-                              e.preventDefault();
-                              e.stopPropagation();
-                              setCellMenu({ x: e.clientX, y: e.clientY, slot });
-                            }}
-                          />
+                          {p.value === "pass2" ? (
+                            <Pass2GridCell
+                              room={room}
+                              slot2a={slotMap.get(`${room.id}-pass2a`)}
+                              slot2b={slotMap.get(`${room.id}-pass2b`)}
+                              students={students}
+                              slots={slots}
+                              dragGroup={dragGroup}
+                              onContextMenuSlot={(e, slot) => {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                setCellMenu({ x: e.clientX, y: e.clientY, slot });
+                              }}
+                            />
+                          ) : (
+                            <GridCell
+                              room={room}
+                              passType={p.value}
+                              slot={slotMap.get(`${room.id}-${p.value}`)}
+                              students={students}
+                              slots={slots}
+                              dragGroup={dragGroup}
+                              onContextMenuSlot={(e, slot) => {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                setCellMenu({ x: e.clientX, y: e.clientY, slot });
+                              }}
+                            />
+                          )}
                         </td>
                       ))}
                     </tr>
@@ -643,11 +712,112 @@ function DraggableGroup({
   );
 }
 
+function Pass2GridCell({
+  room,
+  slot2a,
+  slot2b,
+  students,
+  slots,
+  dragGroup,
+  onContextMenuSlot,
+}: {
+  room: Room;
+  slot2a?: SessionSlot;
+  slot2b?: SessionSlot;
+  students: Student[];
+  slots: SessionSlot[];
+  dragGroup: { inspiration: string; ids: number[] } | null;
+  onContextMenuSlot: (e: React.MouseEvent, slot: SessionSlot) => void;
+}) {
+  const { setNodeRef, isOver } = useDroppable({
+    id: `cell-${room.id}-pass2`,
+    data: { roomId: room.id, passType: "pass2" },
+  });
+
+  let dropTone: "ok" | "conflict" | null = null;
+  if (isOver && dragGroup) {
+    const split = splitStudentsForPlacement(
+      students,
+      dragGroup.ids,
+      dragGroup.inspiration,
+      "pass2",
+      room.id,
+      slots
+    );
+    dropTone =
+      split.inspirator_double_booked || split.eligibleIds.length !== dragGroup.ids.length
+        ? "conflict"
+        : "ok";
+  }
+
+  const blocks: { variant: "2a" | "2b"; slot?: SessionSlot; time: string }[] = [
+    { variant: "2a", slot: slot2a, time: "11:45–12:15" },
+    { variant: "2b", slot: slot2b, time: "12:30–13:00" },
+  ];
+
+  const hasContent = blocks.some((b) => b.slot != null);
+  const anyOccupied = blocks.some((b) => b.slot && b.slot.placed_count > 0);
+  const anyReserved = blocks.some(
+    (b) => b.slot && b.slot.placed_count === 0
+  );
+  const full =
+    anyOccupied &&
+    blocks.every(
+      (b) => !b.slot || !b.slot.placed_count || b.slot.placed_count >= room.capacity
+    );
+
+  const dragInspiration = dragGroup?.inspiration;
+  const lockedVariant =
+    dragInspiration != null
+      ? resolvePlacementPassType("pass2", slots, dragInspiration)
+      : null;
+
+  return (
+    <div
+      id={cellDomId(room.id, "pass2")}
+      data-room-id={room.id}
+      data-pass-type="pass2"
+      ref={setNodeRef}
+      className={`grid-cell pass2-merged ${dropTone === "ok" ? "drop-target-ok" : ""} ${dropTone === "conflict" ? "drop-target-conflict" : ""} ${full ? "full" : ""} ${anyReserved && !anyOccupied ? "reserved" : ""} ${!hasContent ? "empty" : ""}`}
+    >
+      {blocks.map(({ variant, slot, time }) => {
+        const occupied = slot != null && slot.placed_count > 0;
+        const reserved = slot != null && slot.placed_count === 0;
+        const isLockedTarget =
+          lockedVariant === (variant === "2a" ? "pass2a" : "pass2b");
+        if (!occupied && !reserved) return null;
+        return (
+          <div
+            key={variant}
+            className={`pass2-block ${isLockedTarget && isOver ? "pass2-block-target" : ""}`}
+            onContextMenu={(e) => {
+              if (slot && (occupied || reserved)) onContextMenuSlot(e, slot);
+            }}
+          >
+            <span className="pass2-block-time">{variant} · {time}</span>
+            <div className="cell-inspiration">{slot!.inspiration}</div>
+            {occupied ? (
+              <div className="cell-count">
+                {slot!.placed_count} elever ·{" "}
+                {Math.max(0, room.capacity - slot!.placed_count)} ledig(a) plats(er) kvar
+              </div>
+            ) : (
+              <div className="cell-count">Tom cell – dra ny grupp hit</div>
+            )}
+          </div>
+        );
+      })}
+      {!hasContent && <span className="cell-placeholder">Dra hit</span>}
+    </div>
+  );
+}
+
 function GridCell({
   room,
   passType,
   slot,
   students,
+  slots,
   dragGroup,
   onContextMenuSlot,
 }: {
@@ -655,6 +825,7 @@ function GridCell({
   passType: string;
   slot?: SessionSlot;
   students: Student[];
+  slots: SessionSlot[];
   dragGroup: { inspiration: string; ids: number[] } | null;
   onContextMenuSlot: (e: React.MouseEvent, slot: SessionSlot) => void;
 }) {
@@ -673,9 +844,14 @@ function GridCell({
       students,
       dragGroup.ids,
       dragGroup.inspiration,
-      passType
+      passType,
+      room.id,
+      slots
     );
-    dropTone = split.eligibleIds.length === dragGroup.ids.length ? "ok" : "conflict";
+    dropTone =
+      split.inspirator_double_booked || split.eligibleIds.length !== dragGroup.ids.length
+        ? "conflict"
+        : "ok";
   }
 
   return (

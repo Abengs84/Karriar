@@ -189,10 +189,18 @@ export function StudentPlacementTab({
                   {s.first_name} {s.last_name}
                 </td>
                 <td>{s.school}</td>
-                <td className="choice-cell">{s.choice1 || "—"}</td>
-                <td className="choice-cell">{s.choice2 || "—"}</td>
-                <td className="choice-cell">{s.choice3 || "—"}</td>
-                <td className="choice-cell">{s.reserve || "—"}</td>
+                <td className="choice-cell" title={s.choice1 || undefined}>
+                  <span className="choice-cell-text">{s.choice1 || "—"}</span>
+                </td>
+                <td className="choice-cell" title={s.choice2 || undefined}>
+                  <span className="choice-cell-text">{s.choice2 || "—"}</span>
+                </td>
+                <td className="choice-cell" title={s.choice3 || undefined}>
+                  <span className="choice-cell-text">{s.choice3 || "—"}</span>
+                </td>
+                <td className="choice-cell" title={s.reserve || undefined}>
+                  <span className="choice-cell-text">{s.reserve || "—"}</span>
+                </td>
                 {PASS_ROWS.map((p) => {
                   const current = placementAtSchedulePass(s, p.key);
                   let options = slotsByPass[p.key].filter((sl) =>
@@ -204,8 +212,9 @@ export function StudentPlacementTab({
                       options = [curSlot, ...options];
                     }
                   }
+                  const unplaced = !current;
                   return (
-                    <td key={p.key}>
+                    <td key={p.key} className={unplaced ? "pass-cell-unplaced" : undefined}>
                       <select
                         className="pass-select"
                         disabled={savingId === s.id}

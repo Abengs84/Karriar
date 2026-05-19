@@ -17,12 +17,12 @@ function formatSessionCount(n: number): string {
 
 function formatUnplacedStatus(unplaced_count: number): string {
   if (unplaced_count === 0) {
-    return "Alla val 1–3 får ett pass (reserv placeras inte automatiskt).";
+    return "Ingen elev saknar ledigt tidspass för sina val 1–3.";
   }
   if (unplaced_count === 1) {
-    return "1 val 1–3 saknar fortfarande pass.";
+    return "1 val 1–3 saknar fortfarande tidspass.";
   }
-  return `${unplaced_count} val 1–3 saknar fortfarande pass.`;
+  return `${unplaced_count} val 1–3 saknar fortfarande tidspass.`;
 }
 
 function formatAutoPlaceToast(result: AutoSolveResult, phase: "preview" | "apply"): string {
@@ -71,6 +71,7 @@ export function AutoPlaceTab({
 }: Props) {
   const [mode, setMode] = useState<"fill" | "replace">("fill");
   const [minimizeSessionsPerInspirator, setMinimizeSessionsPerInspirator] = useState(false);
+  const [tryReserveForUnplaced, setTryReserveForUnplaced] = useState(false);
   const [preview, setPreview] = useState<AutoSolveResult | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -82,6 +83,7 @@ export function AutoPlaceTab({
         dry_run: dryRun,
         minimize_sessions_per_inspirator: minimizeSessionsPerInspirator,
         min_students_threshold: minStudentsThreshold,
+        try_reserve_for_unplaced: tryReserveForUnplaced,
       });
       if (dryRun) {
         setPreview(result);
@@ -103,9 +105,10 @@ export function AutoPlaceTab({
       <h2>Automatisk placering</h2>
       <p className="auto-place-intro">
         Systemet försöker placera elever på inspiratörspass med så få krockar som möjligt. Val 1
-        vägs tyngst, därefter val 2 och val 3. Reserv placeras inte automatiskt – den är valfri.
-        Varje elev kan ha högst tre pass (pass 1, pass 2 och pass 3) och högst en gång per
-        inspiratör. Pass 2 fördelas ungefär hälften på 2a och hälften på 2b (olika lunch).
+        vägs tyngst, därefter val 2 och val 3. Reserv kan försökas automatiskt via alternativet nedan.
+        Varje elev och varje inspiratör kan ha högst tre tidspass (pass 1, pass 2 och pass 3).
+        Varje inspiratör ligger på antingen lunch 2a eller 2b. Elever fördelas ungefär
+        hälften på vardera lunchspår.
       </p>
 
       <p className="meta">
@@ -150,6 +153,20 @@ export function AutoPlaceTab({
         <p className="auto-place-option-hint">
           När kryssat fylls befintliga sessioner först och större rum väljs vid nya grupper, så
           färre parallella träffar skapas för samma inspiratör.
+        </p>
+        <label>
+          <input
+            type="checkbox"
+            checked={tryReserveForUnplaced}
+            onChange={(e) => setTryReserveForUnplaced(e.target.checked)}
+            disabled={busy}
+          />
+          Försök reserv för elever som saknar pass
+        </label>
+        <p className="auto-place-option-hint">
+          Efter huvudloopen: elever med kvarvarande val 1–3 försöker placeras på reserv. Om
+          reserv inte får plats på ett ledigt pass kan systemet flytta ett befintligt pass till
+          en annan tid (samma inspiratör) och lägga reserv på det frigjorda passet.
         </p>
         <label className="auto-place-threshold">
           <span>Tröskel: min antal elever per inspiratör (val 1–3)</span>
@@ -219,7 +236,7 @@ export function AutoPlaceTab({
               <strong>{preview.slots_created}</strong> nya sessioner (rum + pass)
             </li>
             <li>
-              <strong>{preview.unplaced_count}</strong> val 1–3 utan pass
+              <strong>{preview.unplaced_count}</strong> val 1–3 utan tidspass
             </li>
             <li>
               Poäng (högre = fler prioriterade val uppfyllda): <strong>{preview.score}</strong>
@@ -244,12 +261,12 @@ export function AutoPlaceTab({
           </table>
           {preview.unplaced_sample.length > 0 && (
             <>
-              <h4>Val 1–3 som fortfarande saknar pass (max 80)</h4>
+              <h4>Val 1–3 som saknar ledigt tidspass (max 80)</h4>
               <div className="auto-place-unplaced-scroll">
                 <table className="data-table compact">
                   <thead>
                     <tr>
-                      <th>Elev-id</th>
+                      <th>Elev</th>
                       <th>Inspiratör</th>
                       <th>Val</th>
                     </tr>
@@ -257,7 +274,7 @@ export function AutoPlaceTab({
                   <tbody>
                     {preview.unplaced_sample.map((row) => (
                       <tr key={`${row.student_id}-${row.inspiration}`}>
-                        <td>{row.student_id}</td>
+                        <td>{row.student_name}</td>
                         <td>{row.inspiration}</td>
                         <td>{CHOICE_LABELS[row.choice_field] ?? row.choice_field}</td>
                       </tr>

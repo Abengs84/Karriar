@@ -16,11 +16,14 @@ import { PrivacyNotice } from "./PrivacyNotice";
 import {
   formatChoiceRanks,
   isPlacedWithInspirator,
+  studentHasFullSchedule,
   studentChoiceRanksForInspirator,
   studentsWhoChoseInspirator,
 } from "./placementUtils";
 import { AutoPlaceTab } from "./AutoPlaceTab";
+import { LunchTab } from "./LunchTab";
 import { PlacementBoard } from "./PlacementBoard";
+import { SchemaTab } from "./SchemaTab";
 import {
   readMinStudentsThreshold,
   writeMinStudentsThreshold,
@@ -28,7 +31,17 @@ import {
 import { StudentPlacementTab } from "./StudentPlacementTab";
 import { useToast } from "./Toast";
 
-type Tab = "rum" | "import" | "statistik" | "auto" | "placering" | "elever" | "pdf" | "integritet";
+type Tab =
+  | "rum"
+  | "import"
+  | "statistik"
+  | "auto"
+  | "placering"
+  | "schema"
+  | "lunch"
+  | "elever"
+  | "pdf"
+  | "integritet";
 
 export default function App() {
   const [authenticated, setAuthenticated] = useState<boolean | null>(null);
@@ -203,6 +216,8 @@ export default function App() {
             ["statistik", "Inspiratör"],
             ["auto", "Auto-placering"],
             ["placering", "Placering"],
+            ["schema", "Schema"],
+            ["lunch", "Lunch"],
             ["elever", "Elever"],
             ["pdf", "PDF"],
             ["integritet", "Integritet"],
@@ -250,6 +265,10 @@ export default function App() {
             showMsg={showMsg}
           />
         )}
+        {tab === "schema" && <SchemaTab rooms={rooms} slots={slots} />}
+        {tab === "lunch" && (
+          <LunchTab students={students} onStudentClick={goToStudent} />
+        )}
         {tab === "elever" && (
           <StudentPlacementTab
             students={students}
@@ -292,14 +311,23 @@ function RoomsTab({
   };
 
   const remove = async (id: number) => {
-    if (!confirm("Ta bort rummet?")) return;
-    const res = await api.rooms.delete(id);
-    if (!res.ok) {
-      const err = await res.json();
-      showMsg("error", err.detail || "Kunde inte ta bort");
-      return;
+    try {
+      await api.rooms.delete(id);
+      showMsg("success", "Rum borttaget");
+      await onRefresh();
+    } catch (e) {
+      showMsg("error", e instanceof Error ? e.message : "Kunde inte ta bort");
     }
-    await onRefresh();
+  };
+
+  const updateCapacity = async (id: number, capacity: number) => {
+    if (!Number.isFinite(capacity) || capacity < 1) return;
+    try {
+      await api.rooms.update(id, { capacity });
+      await onRefresh();
+    } catch (e) {
+      showMsg("error", e instanceof Error ? e.message : "Kunde inte uppdatera kapacitet");
+    }
   };
 
   return (
@@ -335,7 +363,19 @@ function RoomsTab({
           {rooms.map((r) => (
             <tr key={r.id}>
               <td>{r.name}</td>
-              <td>{r.capacity}</td>
+              <td>
+                <input
+                  type="number"
+                  min={1}
+                  className="capacity-input"
+                  defaultValue={r.capacity}
+                  key={`${r.id}-${r.capacity}`}
+                  onBlur={(e) => {
+                    const next = Number(e.target.value);
+                    if (next !== r.capacity) void updateCapacity(r.id, next);
+                  }}
+                />
+              </td>
               <td>
                 <button className="danger" onClick={() => remove(r.id)}>
                   Ta bort
@@ -417,7 +457,8 @@ function StatsTab({
       <h2>Val per inspiratör</h2>
       <p style={{ fontSize: "0.9rem", color: "var(--muted)", marginTop: 0 }}>
         Antal unika elever som valt inspiratören i val 1–3 (kolumn E, F, G). Reservval
-        (H) räknas inte. Antal pass = schemaceller i Placering. Summan räknar alla rader
+        (H) räknas inte. Antal pass = tidspass 1–3 i Placering (max 3 per inspiratör;
+        pass 2 = antingen 2a eller 2b). Summan räknar alla rader
         – samma elev kan ingå i flera inspiratörers antal om hen valt flera. Klicka på
         triangeln för att se eleverna; klicka på ett namn för att gå till Elever-fliken.
       </p>
@@ -494,6 +535,10 @@ function StatsTab({
                               <span className="stats-student-meta">{st.school}</span>
                               {isPlacedWithInspirator(st, s.inspiration) ? (
                                 <span className="badge ok stats-student-status">Placerad</span>
+                              ) : studentHasFullSchedule(st) ? (
+                                <span className="badge ok stats-student-status">
+                                  Tre pass (annat val)
+                                </span>
                               ) : (
                                 <span className="badge warn stats-student-status">Oplacerad</span>
                               )}

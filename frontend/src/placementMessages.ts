@@ -9,10 +9,21 @@ export type PlacementResult = {
 
 const PASS_LABELS: Record<string, string> = {
   pass1: "pass 1",
+  pass2: "pass 2",
   pass2a: "pass 2a",
   pass2b: "pass 2b",
   pass3: "pass 3",
 };
+
+export function formatInspiratorDoubleBookedError(
+  inspiration: string,
+  otherRoomName: string
+): string {
+  return (
+    `«${inspiration}» har redan ett pass i ${otherRoomName} denna tid. ` +
+    "En inspiratör kan bara vara på ett ställe åt gången."
+  );
+}
 
 export function formatPlacementError(result: PlacementResult, passType: string): string {
   const passLabel = PASS_LABELS[passType] ?? passType;

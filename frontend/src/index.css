@@ -208,6 +208,10 @@ th {
   font-weight: 500;
 }
 
+.capacity-input {
+  width: 4.5rem;
+}
+
 tfoot .stats-total-row th,
 tfoot .stats-total-row td {
   border-top: 2px solid var(--border);
@@ -334,6 +338,550 @@ tfoot .stats-total-row td {
 
 .stats-student-status {
   margin-left: auto;
+}
+
+.lunch-tab-lead {
+  color: var(--muted);
+  font-size: 0.9rem;
+  margin-top: 0;
+}
+
+.lunch-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
+  gap: 0.75rem;
+  margin-bottom: 1.25rem;
+}
+
+.lunch-summary-card {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.85rem 1rem;
+  background: var(--surface);
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+.lunch-summary-2a {
+  border-left: 4px solid var(--accent);
+}
+
+.lunch-summary-2b {
+  border-left: 4px solid #4a6fa5;
+}
+
+.lunch-summary-unassigned {
+  border-left: 4px solid var(--warn);
+}
+
+.lunch-summary-label {
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.lunch-summary-count {
+  font-size: 1.75rem;
+  font-weight: 600;
+  line-height: 1.1;
+}
+
+.lunch-summary-time {
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.lunch-columns {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr));
+  gap: 1.25rem;
+}
+
+.lunch-column {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 1rem;
+  background: var(--surface);
+}
+
+.lunch-column h3 {
+  font-size: 1rem;
+  margin-bottom: 0.25rem;
+}
+
+.lunch-column-count {
+  font-weight: 400;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.lunch-column-times {
+  font-size: 0.85rem;
+  color: var(--muted);
+  margin: 0 0 0.75rem;
+}
+
+.lunch-empty {
+  font-size: 0.9rem;
+  color: var(--muted);
+  margin: 0;
+}
+
+.lunch-student-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 28rem;
+  overflow-y: auto;
+}
+
+.lunch-student-list li {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  padding: 0.35rem 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.lunch-student-list li:last-child {
+  border-bottom: none;
+}
+
+.lunch-student-link {
+  border: none;
+  background: none;
+  padding: 0;
+  color: var(--accent);
+  text-align: left;
+  font-weight: 500;
+}
+
+.lunch-student-link:hover {
+  text-decoration: underline;
+}
+
+.lunch-student-meta {
+  font-size: 0.85rem;
+  color: var(--muted);
+  margin-left: auto;
+}
+
+.lunch-unassigned {
+  margin-top: 1.25rem;
+  padding-top: 1.25rem;
+  border-top: 1px solid var(--border);
+}
+
+.lunch-unassigned h3 {
+  font-size: 1rem;
+}
+
+/* Schema – utskrift */
+.schema-tab {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.schema-toolbar-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.schema-toolbar-row h2 {
+  margin: 0;
+}
+
+.schema-lead {
+  color: var(--muted);
+  font-size: 0.9rem;
+  margin: 0.5rem 0 0.75rem;
+}
+
+.schema-view-toggle {
+  display: flex;
+  gap: 0.35rem;
+}
+
+.schema-view-toggle button {
+  padding: 0.4rem 0.85rem;
+}
+
+.schema-view-toggle button.active {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
+
+.schema-empty {
+  color: var(--muted);
+  margin: 0;
+}
+
+.schema-table-wrap {
+  overflow: auto;
+}
+
+.schema-grid .grid-cell,
+.schema-grid td:empty {
+  min-height: auto;
+}
+
+.schema-cell {
+  padding: 0.35rem 0.5rem;
+}
+
+.schema-grid.schedule-grid td,
+.schema-grid.schedule-grid th.room-name {
+  padding: 0.45rem 0.55rem;
+  vertical-align: top;
+}
+
+.schema-grid.schedule-grid .room-header,
+.schema-grid.schedule-grid .pass-header {
+  padding: 0.45rem 0.55rem;
+}
+
+.schema-cell-inspiration {
+  font-size: 0.72rem;
+  font-weight: 600;
+  line-height: 1.25;
+  margin-bottom: 0.2rem;
+}
+
+.schema-cell-count {
+  font-size: 0.72rem;
+  color: var(--muted);
+}
+
+.schema-pass2-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.schema-pass2-block {
+  padding: 0.25rem 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.schema-pass2-block:last-child {
+  border-bottom: none;
+}
+
+.schema-pass2-time {
+  display: block;
+  font-size: 0.65rem;
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  margin-bottom: 0.15rem;
+}
+
+.schema-room-toolbar label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  font-size: 0.9rem;
+  max-width: 20rem;
+}
+
+.schema-rooms-print {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.schema-room-card {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 1rem 1.15rem;
+  background: var(--surface);
+}
+
+.schema-room-card-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 0.65rem;
+  padding-bottom: 0.5rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.schema-room-card-header h3 {
+  margin: 0;
+  font-size: 1.1rem;
+}
+
+.schema-room-cap {
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.schema-room-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.schema-room-list li {
+  display: grid;
+  grid-template-columns: 9rem 1fr auto;
+  gap: 0.5rem 1rem;
+  padding: 0.45rem 0;
+  border-bottom: 1px solid var(--border);
+  align-items: baseline;
+}
+
+.schema-room-list li:last-child {
+  border-bottom: none;
+}
+
+.schema-room-pass {
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.schema-room-insp {
+  font-weight: 600;
+  font-size: 0.85rem;
+}
+
+.schema-room-meta {
+  font-size: 0.8rem;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.schema-room-unbooked {
+  grid-column: 2 / -1;
+  font-size: 0.85rem;
+  font-style: italic;
+  color: var(--muted);
+}
+
+.schema-inspirator-lunch-row {
+  background: var(--bg);
+}
+
+.schema-inspirator-lunch-venue {
+  font-weight: 500;
+  font-style: italic;
+  color: var(--muted);
+}
+
+.only-print {
+  display: none;
+}
+
+.schema-print-header h1 {
+  font-size: 1.25rem;
+  margin: 0 0 0.25rem;
+}
+
+.schema-print-header p {
+  margin: 0 0 0.75rem;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.schema-section-title {
+  font-size: 1rem;
+  margin: 0 0 0.75rem;
+}
+
+@media print {
+  :root {
+    background: #fff !important;
+  }
+
+  @page {
+    size: A4 portrait;
+    margin: 12mm;
+  }
+
+  html,
+  body,
+  #root,
+  .main,
+  .schema-tab {
+    background: #fff !important;
+    width: auto !important;
+    height: auto !important;
+    min-height: 0 !important;
+    overflow: visible !important;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  .app-header,
+  nav.tabs,
+  .no-print,
+  .toast-container,
+  .main > p {
+    display: none !important;
+  }
+
+  .main {
+    padding: 0 !important;
+    max-width: none !important;
+    margin: 0 !important;
+  }
+
+  .schema-tab {
+    gap: 0;
+  }
+
+  .schema-print-area {
+    box-shadow: none !important;
+    border: none !important;
+    padding: 0 !important;
+    margin: 0 !important;
+  }
+
+  .only-print {
+    display: block;
+  }
+
+  .schema-print-overview .schema-table-wrap {
+    overflow: visible !important;
+    max-height: none !important;
+    box-sizing: border-box;
+    max-width: 100%;
+    padding: 0 2mm;
+  }
+
+  .schema-print-overview .schedule-grid.schema-grid {
+    width: 100%;
+    max-width: 100%;
+    table-layout: fixed;
+    box-sizing: border-box;
+    font-size: 9pt;
+    border-collapse: collapse;
+  }
+
+  .schema-print-overview .schedule-grid.schema-grid thead {
+    display: table-header-group;
+  }
+
+  .schema-print-overview .schedule-grid.schema-grid tr {
+    page-break-inside: auto;
+    break-inside: auto;
+  }
+
+  .schema-print-overview .schedule-grid.schema-grid td,
+  .schema-print-overview .schedule-grid.schema-grid th {
+    page-break-inside: auto;
+    break-inside: auto;
+    min-width: 0 !important;
+    overflow: visible;
+  }
+
+  .schema-print-overview .schedule-grid.schema-grid .pass-header,
+  .schema-print-overview .schedule-grid.schema-grid .room-header,
+  .schema-print-overview .schedule-grid.schema-grid .room-name,
+  .schema-print-overview .schedule-grid.schema-grid td {
+    padding: 2.5mm 2mm !important;
+    background: #fff !important;
+  }
+
+  .schema-print-overview .schedule-grid.schema-grid .room-header,
+  .schema-print-overview .schedule-grid.schema-grid .room-name {
+    width: 13%;
+  }
+
+  .schema-print-overview .schedule-grid.schema-grid .pass-header,
+  .schema-print-overview .schedule-grid.schema-grid td:not(:first-child) {
+    width: 29%;
+  }
+
+  .schema-print-overview .schedule-grid.schema-grid tbody tr:last-child td,
+  .schema-print-overview .schedule-grid.schema-grid tbody tr:last-child th {
+    border-bottom: 1px solid var(--border);
+  }
+
+  .schema-print-overview .schema-cell {
+    padding: 1mm 0 !important;
+    max-width: 100%;
+  }
+
+  .schema-print-overview .schema-cell-inspiration {
+    font-size: 8pt;
+    line-height: 1.3;
+    word-break: break-word;
+    overflow-wrap: anywhere;
+  }
+
+  .schema-print-overview .schema-cell-count,
+  .schema-print-overview .schema-pass2-time {
+    font-size: 7.5pt;
+    white-space: normal;
+    word-break: break-word;
+    overflow-wrap: anywhere;
+  }
+
+  .schema-print-overview .schema-pass2-block {
+    padding: 1mm 0;
+  }
+
+  .schema-print-rooms .schema-rooms-print,
+  .schema-print-inspirators .schema-rooms-print {
+    padding: 0 1mm;
+  }
+
+  .schema-print-rooms .schema-room-card,
+  .schema-print-inspirators .schema-room-card {
+    page-break-inside: avoid;
+    break-inside: avoid;
+    page-break-after: always;
+    break-after: page;
+    box-sizing: border-box;
+    width: 100%;
+    max-width: 100%;
+    border: 1px solid #ccc;
+    border-radius: 0;
+    margin: 0;
+    padding: 5mm 6mm;
+  }
+
+  .schema-print-rooms .schema-room-card:last-child,
+  .schema-print-inspirators .schema-room-card:last-child {
+    page-break-after: auto;
+    break-after: auto;
+  }
+
+  .schema-print-rooms .schema-room-list li,
+  .schema-print-inspirators .schema-room-list li {
+    grid-template-columns: 8rem minmax(0, 1fr) minmax(0, 9rem);
+    gap: 0.35rem 0.75rem;
+  }
+
+  .schema-print-rooms .schema-room-meta,
+  .schema-print-inspirators .schema-room-meta {
+    white-space: normal;
+    text-align: right;
+    word-break: break-word;
+    overflow-wrap: anywhere;
+  }
+
+  .schema-print-rooms .schema-room-insp,
+  .schema-print-inspirators .schema-room-insp {
+    word-break: break-word;
+    overflow-wrap: anywhere;
+  }
+
+  .schema-print-inspirators .schema-inspirator-lunch-row {
+    background: #f7f7f7;
+  }
+
+  .schema-room-list li {
+    grid-template-columns: 8rem 1fr auto;
+  }
 }
 
 .student-row-focus td {
@@ -625,6 +1173,44 @@ tfoot .stats-total-row td {
   color: var(--muted);
 }
 
+.pass-sub {
+  display: block;
+  font-size: 0.68rem;
+  color: var(--muted);
+  margin-top: 0.15rem;
+}
+
+.grid-cell.pass2-merged {
+  min-width: 150px;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.pass2-block {
+  padding: 0.25rem 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.pass2-block:last-child {
+  border-bottom: none;
+}
+
+.pass2-block-time {
+  display: block;
+  font-size: 0.65rem;
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  margin-bottom: 0.15rem;
+}
+
+.pass2-block-target {
+  outline: 1px dashed var(--accent);
+  border-radius: 4px;
+}
+
 .schedule-grid .room-name {
   background: var(--bg);
   padding: 0.5rem 0.65rem;
@@ -791,6 +1377,16 @@ tfoot .stats-total-row td {
   max-width: 140px;
   font-size: 0.72rem;
   color: var(--muted);
+  vertical-align: top;
+}
+
+.student-pass-table .choice-cell-text {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  line-height: 1.25;
+  word-break: break-word;
 }
 
 .student-pass-table tr.saving {
@@ -803,6 +1399,15 @@ tfoot .stats-total-row td {
   max-width: 220px;
   font-size: 0.75rem;
   padding: 0.25rem;
+}
+
+.student-pass-table td.pass-cell-unplaced {
+  background: #fecaca;
+}
+
+.student-pass-table td.pass-cell-unplaced .pass-select {
+  background: #fff1f2;
+  border-color: #dc2626;
 }
 
 .inspirator-group.dragging-overlay {
