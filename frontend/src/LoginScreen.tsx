@@ -31,8 +31,7 @@ export function LoginScreen({ onLoggedIn }: Props) {
       <div className="login-card card">
         <h1>Karriär – Placering</h1>
         <p className="login-lead">
-          Logga in med lösenord för att hantera elevdata. Endast behörig personal ska ha
-          åtkomst.
+          Logga in med lösenord för att hantera data.
         </p>
         <form onSubmit={submit} className="login-form">
           <label htmlFor="password">Lösenord</label>

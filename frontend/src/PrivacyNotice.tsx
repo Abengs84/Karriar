@@ -36,12 +36,12 @@ export function PrivacyNotice({ onClose }: Props) {
             Detta verktyg behandlar personuppgifter om elever (namn, skola och val av
             inspirationsträffar) i syfte att planera och genomföra Karriär-evenemanget.
           </p>
-          <h3>Vilka uppgifter lagras?</h3>
+          <h3>Vilka uppgifter lagras tillfälligt?</h3>
           <ul>
             <li>För- och efternamn</li>
             <li>Skola</li>
-            <li>Val av inspirationsträffar (inkl. reserv)</li>
-            <li>Placeringar och lunchspår som ni skapar i systemet</li>
+            <li>Val av inspirationsträffar</li>
+            <li>Placeringar som skapas i systemet</li>
           </ul>
           <p>
             Importerad Excel-fil sparas <strong>inte</strong> på servern – endast uppgifterna
@@ -50,19 +50,16 @@ export function PrivacyNotice({ onClose }: Props) {
           <h3>Rättslig grund</h3>
           <p>
             Behandlingen sker för att arrangera en skolaktivitet som eleverna deltar i.
-            Personuppgiftsansvarig är respektive skola/arrangör – ange kontakt hos er
-            organisation för frågor från elever eller vårdnadshavare.
           </p>
           <h3>Lagring och säkerhet</h3>
           <ul>
-            <li>Uppgifterna lagras i en databas på den server där appen körs.</li>
+            <li>Uppgifterna lagras tillfälligt i en databas på den server där appen körs.</li>
             <li>Åtkomst skyddas med lösenord.</li>
-            <li>Använd HTTPS i produktion (t.ex. AWS bakom TLS).</li>
             <li>
               Radera uppgifterna när evenemanget är avslutat (knappen «Töm elever/databas»), eller
               låt dem raderas automatiskt ca 3 timmar efter Excel-import.
             </li>
-            <li>Åtkomst kan begränsas till finska IP-adresser.</li>
+            <li>Åtkomst begränsas till finska IP-adresser.</li>
           </ul>
           <h3>Dina rättigheter</h3>
           <ul>
@@ -79,10 +76,6 @@ export function PrivacyNotice({ onClose }: Props) {
             En teknisk sessionscookie används för att hålla dig inloggad. Den är nödvändig för
             säker åtkomst och kräver inte separat samtycke enligt ePrivacy när den används enbart
             för autentisering.
-          </p>
-          <p className="privacy-muted">
-            Mer information för administratörer finns i{" "}
-            <code>docs/PERSONUPPGIFTER.md</code> i projektet.
           </p>
         </div>
         <div className="privacy-actions">
