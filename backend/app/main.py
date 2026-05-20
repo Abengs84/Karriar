@@ -54,6 +54,11 @@ from app.retention import (
     schedule_purge_after_import,
 )
 from app.pdf_generator import generate_school_pdf
+from app.inspirator_room_locks import (
+    clear_room_locks,
+    list_room_locks,
+    lock_all_inspirators_to_current_rooms,
+)
 from app.schemas import (
     AutoSolveOut,
     AutoSolveRequest,
@@ -63,6 +68,9 @@ from app.schemas import (
     ImportResult,
     RetentionStatus,
     UnplacedNeedOut,
+    InspiratorRoomLockOut,
+    InspiratorRoomLocksOut,
+    InspiratorRoomLocksSetResult,
     InspiratorStat,
     LunchTrackUpdate,
     PlacementOut,
@@ -281,6 +289,31 @@ def delete_room(room_id: int, db: Session = Depends(get_db)):
     db.delete(room)
     db.commit()
     return {"ok": True}
+
+
+@app.get("/api/inspirator-room-locks", response_model=InspiratorRoomLocksOut)
+def get_inspirator_room_locks(db: Session = Depends(get_db)):
+    rows = list_room_locks(db)
+    locks = [InspiratorRoomLockOut(**r) for r in rows]
+    return InspiratorRoomLocksOut(locks=locks, count=len(locks))
+
+
+@app.post(
+    "/api/inspirator-room-locks/from-current",
+    response_model=InspiratorRoomLocksSetResult,
+)
+def lock_inspirators_to_current_rooms(db: Session = Depends(get_db)):
+    """Lås varje inspiratör till rummet med flest elever i nuvarande schema."""
+    count = lock_all_inspirators_to_current_rooms(db)
+    db.commit()
+    return InspiratorRoomLocksSetResult(count=count)
+
+
+@app.delete("/api/inspirator-room-locks", response_model=InspiratorRoomLocksSetResult)
+def delete_inspirator_room_locks(db: Session = Depends(get_db)):
+    count = clear_room_locks(db)
+    db.commit()
+    return InspiratorRoomLocksSetResult(count=count)
 
 
 def _inspirator_pass_types(
@@ -520,9 +553,12 @@ def inspirator_stats(db: Session = Depends(get_db)):
     )
     inspirations = collect_all_inspirations(students)
     pass_types_by_insp: dict[str, list[str]] = {}
-    for inspiration, pass_type in db.query(
-        SessionSlot.inspiration, SessionSlot.pass_type
-    ).all():
+    for inspiration, pass_type in (
+        db.query(SessionSlot.inspiration, SessionSlot.pass_type)
+        .join(Placement, Placement.session_slot_id == SessionSlot.id)
+        .distinct()
+        .all()
+    ):
         pass_types_by_insp.setdefault(inspiration, []).append(pass_type)
     result = []
 
@@ -787,6 +823,9 @@ def auto_solve(data: AutoSolveRequest, db: Session = Depends(get_db)):
     if not rooms_orm:
         raise HTTPException(400, "Skapa minst ett rum innan automatisk placering.")
 
+    exclusive_rooms = data.same_room_per_inspirator
+    room_locks = None
+
     if data.mode == "replace" and not data.dry_run:
         db.query(Placement).delete()
         db.query(SessionSlot).delete()
@@ -829,22 +868,29 @@ def auto_solve(data: AutoSolveRequest, db: Session = Depends(get_db)):
             students,
             rooms,
             slots,
-            minimize_sessions_per_inspirator=data.minimize_sessions_per_inspirator,
             min_students_threshold=data.min_students_threshold,
             try_reserve_for_unplaced=data.try_reserve_for_unplaced,
+            balance_lunch_tracks=data.balance_lunch_tracks,
+            consolidate_small_groups=data.consolidate_small_groups,
+            room_locks=room_locks,
+            exclusive_one_inspirator_per_room=exclusive_rooms,
         )
     else:
         students, slots, result = run_on_orm(
             students_orm,
             rooms_orm,
             slots_orm,
-            minimize_sessions_per_inspirator=data.minimize_sessions_per_inspirator,
             min_students_threshold=data.min_students_threshold,
             try_reserve_for_unplaced=data.try_reserve_for_unplaced,
+            balance_lunch_tracks=data.balance_lunch_tracks,
+            consolidate_small_groups=data.consolidate_small_groups,
+            room_locks=room_locks,
+            exclusive_one_inspirator_per_room=exclusive_rooms,
         )
 
     if not data.dry_run:
         apply_solution_to_db(db, students_orm, slots)
+        purge_empty_session_slots(db)
         db.commit()
 
     student_by_id = {s.id: s for s in students_orm}
@@ -867,12 +913,17 @@ def auto_solve(data: AutoSolveRequest, db: Session = Depends(get_db)):
         placed_new=result.placed_new,
         slots_created=result.slots_created,
         unplaced_count=len(result.unplaced_needs),
+        missing_pass_count=result.missing_pass_count,
         unplaced_sample=sample,
         score=result.score,
         by_choice_field=result.by_choice_field,
         summary=result.summary,
         dry_run=data.dry_run,
         suppressed_inspirators=result.suppressed_inspirators,
+        lunch_2a=result.lunch_2a,
+        lunch_2b=result.lunch_2b,
+        rooms_relocated=result.rooms_relocated,
+        reserve_placed_count=result.reserve_placed_count,
     )
 
 

@@ -14,11 +14,14 @@ import { RetentionCountdown } from "./RetentionCountdown";
 import { LoginScreen } from "./LoginScreen";
 import { PrivacyNotice } from "./PrivacyNotice";
 import {
+  countStudentsWithAllChoicesPlaced,
+  countStudentsWithUnplacedChoice,
   formatChoiceRanks,
   isPlacedWithInspirator,
   studentHasFullSchedule,
   studentChoiceRanksForInspirator,
   studentsWhoChoseInspirator,
+  totalRequiredChoiceSlots,
 } from "./placementUtils";
 import { AutoPlaceTab } from "./AutoPlaceTab";
 import { LunchTab } from "./LunchTab";
@@ -447,10 +450,10 @@ function StatsTab({
     });
   };
 
-  const totalStudents = stats.reduce((sum, s) => sum + s.count, 0);
   const totalPasses = stats.reduce((sum, s) => sum + s.pass_count, 0);
-  const totalPlaced = stats.reduce((sum, s) => sum + s.placed, 0);
-  const totalUnplaced = stats.reduce((sum, s) => sum + s.unplaced, 0);
+  const totalChoiceSlots = totalRequiredChoiceSlots(students);
+  const totalPlacedStudents = countStudentsWithAllChoicesPlaced(students);
+  const totalUnplacedStudents = countStudentsWithUnplacedChoice(students);
 
   return (
     <div className="card">
@@ -458,9 +461,10 @@ function StatsTab({
       <p style={{ fontSize: "0.9rem", color: "var(--muted)", marginTop: 0 }}>
         Antal unika elever som valt inspiratören i val 1–3 (kolumn E, F, G). Reservval
         (H) räknas inte. Antal pass = tidspass 1–3 i Placering (max 3 per inspiratör;
-        pass 2 = antingen 2a eller 2b). Summan räknar alla rader
-        – samma elev kan ingå i flera inspiratörers antal om hen valt flera. Klicka på
-        triangeln för att se eleverna; klicka på ett namn för att gå till Elever-fliken.
+        pass 2 = antingen 2a eller 2b). Summan visar unika elever (samma som i
+        sidhuvudet), inte summan av raderna – en elev med tre val räknas bara en gång
+        där. Klicka på triangeln för att se eleverna; klicka på ett namn för att gå
+        till Elever-fliken.
       </p>
       <table className="stats-table">
         <thead>
@@ -559,19 +563,22 @@ function StatsTab({
             <td />
             <th scope="row">Summa</th>
             <td>
-              <strong>{totalStudents}</strong>
+              <strong>{students.length}</strong>
+              {totalChoiceSlots !== students.length && (
+                <span className="stats-total-meta"> ({totalChoiceSlots} val totalt)</span>
+              )}
             </td>
             <td>
               <strong>{totalPasses}</strong>
             </td>
             <td>
-              <span className="badge ok">{totalPlaced}</span>
+              <span className="badge ok">{totalPlacedStudents}</span>
             </td>
             <td>
-              {totalUnplaced > 0 ? (
-                <span className="badge warn">{totalUnplaced}</span>
+              {totalUnplacedStudents > 0 ? (
+                <span className="badge warn">{totalUnplacedStudents}</span>
               ) : (
-                <span className="badge ok">{totalUnplaced}</span>
+                <span className="badge ok">{totalUnplacedStudents}</span>
               )}
             </td>
           </tr>

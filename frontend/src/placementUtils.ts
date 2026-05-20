@@ -189,6 +189,26 @@ export function isUnplacedForInspirator(
   return true;
 }
 
+/** Totalt antal val 1–3 (samma elev kan räknas flera gånger). */
+export function totalRequiredChoiceSlots(students: Student[]): number {
+  return students.reduce((sum, s) => sum + studentRequiredChoices(s).length, 0);
+}
+
+/** Unika elever där alla val 1–3 är placerade hos respektive inspiratör. */
+export function countStudentsWithAllChoicesPlaced(students: Student[]): number {
+  return students.filter((s) => {
+    const choices = studentRequiredChoices(s);
+    return choices.length > 0 && choices.every((insp) => isPlacedWithInspirator(s, insp));
+  }).length;
+}
+
+/** Unika elever med minst ett oplacerat val 1–3 (samma logik som per-rad oplacerade). */
+export function countStudentsWithUnplacedChoice(students: Student[]): number {
+  return students.filter((s) =>
+    studentRequiredChoices(s).some((insp) => isUnplacedForInspirator(s, insp))
+  ).length;
+}
+
 /** Vilket lunchspår inspiratören redan använder (pass2a eller pass2b). */
 export function inspiratorPass2VariantLocked(
   slots: SessionSlot[],

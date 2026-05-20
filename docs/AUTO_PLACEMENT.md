@@ -39,7 +39,9 @@ Använd alltid förhandsgranskning först.
 5. **Rumskapacitet** – Varje session (rum + passtyp + inspiratör) har högst `capacity` elever.
 6. **Max tre tidspass per inspiratör** – Pass 1, pass 2 och pass 3. Pass 2 = antingen 2a eller 2b (lunchspår låses vid första session).
 7. **Ett rum per pass och inspiratör** – Samma inspiratör kan inte ligga i två rum samtidigt (samma passtyp). Om rummet är fullt: använd ett **annat tidspass**, inte ett annat rum samma tid.
-8. **Ett inspiratörnamn per ruta** – I ett givet rum och passtyp kan bara **en** inspiratör ligga.
+8. **Samma rum på flera pass** – Auto-placering försöker lägga samma inspiratör i **samma rum** på pass 1, 2 och 3 när den tiden är ledig i rummet (mjuk prioritering om inget rumslås finns).
+9. **Ett rum per inspiratör (kryssruta)** – Varje inspiratör har **ett** rum för alla pass; rum väljs efter **antal val** (flest val → största lediga sal). Befintliga sessioner flyttas till tilldelat rum. Med *Försök reserv* räknas även reservval in i efterfrågan.
+10. **Ett inspiratörnamn per ruta** – I ett givet rum och passtyp kan bara **en** inspiratör ligga.
 
 ## Hur algoritmen tänker
 
@@ -76,6 +78,7 @@ Pass 2 kan ligga i kolumn **pass 2a** eller **pass 2b** – olika lunchtider. Re
 
 - Om eleven redan har lunchspår **2a** eller **2b** (t.ex. från tidigare manuell placering) behålls det spåret.
 - Annars väljs spåret med **färre elever hittills**, så ungefär **hälften** av eleverna hamnar på 2a och hälften på 2b över hela evenemanget.
+- Med **Balansera lunchspår** planeras olåsta inspiratörer till 2a eller 2b utifrån hur många elever som förväntas behöva pass 2 hos dem, så att lunchfördelningen blir jämnare (varje inspiratör ligger fortfarande bara på ett spår).
 - Om det bara finns plats i ett spår används det som finns (balansen kan då bli skev p.g.a. rumskapacitet).
 
 ### Steg 4 – Förbättringsvarv
@@ -95,7 +98,20 @@ Eleven måste ha reservval. De räknas inte längre som «val 1–3 utan pass» 
 
 - Finns redan en session med samma inspiratör + passtyp och lediga platser → eleven läggs där.
 - Annars väljs ett **ledigt rum** för den passtypen (eller samma rum om samma inspiratör redan ligger där).
-- Om alla platser är fulla skapas en **ny session** i nästa lediga rum med störst kapacitet.
+- Vid **stor förväntad grupp** (eller kryssat «få sessioner») väljs **större rum först** vid nya sessioner.
+- Om sessionen är **full** men fler elever väntar: systemet försöker **flytta** sessionen till ett större ledigt rum, eller **byta rum** med en annan inspiratör som får plats i det mindre rummet (samma passtyp).
+- Efter förbättringsvarven körs extra varv som expanderar fulla sessioner innan reserv steg 4b.
+
+### Steg 5c – Samla små grupper (valfritt, standard på)
+
+Om **Samla små grupper på ett pass per inspiratör** är ikryssat:
+
+- Under placering: befintliga sessioner fylls först och större rum väljs vid stora grupper (färre parallella träffar).
+- Efter placering: elever som träffar samma inspiratör på **flera** tidspass samlas till **en** session när det går. Tomma sessioner tas bort. Gäller grupper upp till ca 40 elever.
+
+### Steg 5b – Större rum vid fullt rum
+
+Efter huvudloopen: om t.ex. KRIMINOLOG ligger i F506 (20 platser) och är full, men fler elever valt kriminolog, försöker algoritmen flytta hela sessionen till ett större rum samma tid. Om det större rummet redan har en annan inspiratör byts rummen om den andra gruppen får plats i det mindre.
 
 ## Varför kan val ändå bli kvar?
 

@@ -15,20 +15,33 @@ function formatSessionCount(n: number): string {
   return `${n} nya sessioner`;
 }
 
-function formatUnplacedStatus(unplaced_count: number): string {
+function formatUnplacedStatus(
+  unplaced_count: number,
+  missing_pass_count: number
+): string {
+  const parts: string[] = [];
   if (unplaced_count === 0) {
-    return "Ingen elev saknar ledigt tidspass för sina val 1–3.";
+    parts.push("Alla val 1–3 har matchande inspiratör.");
+  } else if (unplaced_count === 1) {
+    parts.push("1 val 1–3 utan matchande pass.");
+  } else {
+    parts.push(`${unplaced_count} val 1–3 utan matchande pass.`);
   }
-  if (unplaced_count === 1) {
-    return "1 val 1–3 saknar fortfarande tidspass.";
+  if (missing_pass_count === 1) {
+    parts.push("1 elev saknar fortfarande pass 1, 2 eller 3.");
+  } else if (missing_pass_count > 1) {
+    parts.push(`${missing_pass_count} elever saknar fortfarande pass 1, 2 eller 3.`);
   }
-  return `${unplaced_count} val 1–3 saknar fortfarande tidspass.`;
+  return parts.join(" ");
 }
 
 function formatAutoPlaceToast(result: AutoSolveResult, phase: "preview" | "apply"): string {
-  const { placed_new, slots_created, unplaced_count } = result;
+  const { placed_new, slots_created, unplaced_count, missing_pass_count } = result;
   const sessions = formatSessionCount(slots_created);
-  const status = formatUnplacedStatus(unplaced_count);
+  const status = formatUnplacedStatus(
+    unplaced_count,
+    missing_pass_count ?? 0
+  );
 
   if (phase === "preview") {
     const vals =
@@ -70,8 +83,10 @@ export function AutoPlaceTab({
   showMsg,
 }: Props) {
   const [mode, setMode] = useState<"fill" | "replace">("fill");
-  const [minimizeSessionsPerInspirator, setMinimizeSessionsPerInspirator] = useState(false);
   const [tryReserveForUnplaced, setTryReserveForUnplaced] = useState(false);
+  const [balanceLunchTracks, setBalanceLunchTracks] = useState(true);
+  const [consolidateSmallGroups, setConsolidateSmallGroups] = useState(true);
+  const [sameRoomPerInspirator, setSameRoomPerInspirator] = useState(false);
   const [preview, setPreview] = useState<AutoSolveResult | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -81,9 +96,11 @@ export function AutoPlaceTab({
       const result = await api.placements.autoSolve({
         mode,
         dry_run: dryRun,
-        minimize_sessions_per_inspirator: minimizeSessionsPerInspirator,
         min_students_threshold: minStudentsThreshold,
         try_reserve_for_unplaced: tryReserveForUnplaced,
+        balance_lunch_tracks: balanceLunchTracks,
+        consolidate_small_groups: consolidateSmallGroups,
+        same_room_per_inspirator: sameRoomPerInspirator,
       });
       if (dryRun) {
         setPreview(result);
@@ -107,8 +124,9 @@ export function AutoPlaceTab({
         Systemet försöker placera elever på inspiratörspass med så få krockar som möjligt. Val 1
         vägs tyngst, därefter val 2 och val 3. Reserv kan försökas automatiskt via alternativet nedan.
         Varje elev och varje inspiratör kan ha högst tre tidspass (pass 1, pass 2 och pass 3).
-        Varje inspiratör ligger på antingen lunch 2a eller 2b. Elever fördelas ungefär
-        hälften på vardera lunchspår.
+        Varje inspiratör ligger på antingen lunch 2a eller 2b. Kryssa i balansering nedan
+        för jämnare fördelning mellan lunchspåren. Utan kryssrutan nedan prioriterar
+        systemet samma rum per inspiratör när det går.
       </p>
 
       <p className="meta">
@@ -144,15 +162,43 @@ export function AutoPlaceTab({
         <label>
           <input
             type="checkbox"
-            checked={minimizeSessionsPerInspirator}
-            onChange={(e) => setMinimizeSessionsPerInspirator(e.target.checked)}
+            checked={sameRoomPerInspirator}
+            onChange={(e) => setSameRoomPerInspirator(e.target.checked)}
             disabled={busy}
           />
-          Prioritera få sessioner per inspiratör (samlar grupper i samma rum/pass)
+          Ett rum per inspiratör (alla pass i samma rum)
         </label>
         <p className="auto-place-option-hint">
-          När kryssat fylls befintliga sessioner först och större rum väljs vid nya grupper, så
-          färre parallella träffar skapas för samma inspiratör.
+          Varje inspiratör får ett eget rum för pass 1, 2 och 3. Rum tilldelas efter antal
+          val (störst efterfrågan → största sal). Befintliga sessioner flyttas till rätt rum
+          vid körning. Utan kryss kan flera inspiratörer dela rum på olika tider.
+        </p>
+        <label>
+          <input
+            type="checkbox"
+            checked={consolidateSmallGroups}
+            onChange={(e) => setConsolidateSmallGroups(e.target.checked)}
+            disabled={busy}
+          />
+          Samla små grupper på ett pass per inspiratör
+        </label>
+        <p className="auto-place-option-hint">
+          Fyller befintliga sessioner först och samlar små grupper till ett pass efter
+          placering (t.ex. 8 elever på tre tidspass → en gemensam träff när det finns plats).
+        </p>
+        <label>
+          <input
+            type="checkbox"
+            checked={balanceLunchTracks}
+            onChange={(e) => setBalanceLunchTracks(e.target.checked)}
+            disabled={busy}
+          />
+          Balansera lunchspår (2a / 2b)
+        </label>
+        <p className="auto-place-option-hint">
+          Fördelar inspiratörer utan låst pass 2 mellan lunch 2a och 2b så att ungefär
+          hälften av eleverna hamnar på varje spår. Inspiratörer som redan ligger på 2a
+          eller 2b behålls.
         </p>
         <label>
           <input
@@ -164,9 +210,9 @@ export function AutoPlaceTab({
           Försök reserv för elever som saknar pass
         </label>
         <p className="auto-place-option-hint">
-          Efter huvudloopen: elever med kvarvarande val 1–3 försöker placeras på reserv. Om
-          reserv inte får plats på ett ledigt pass kan systemet flytta ett befintligt pass till
-          en annan tid (samma inspiratör) och lägga reserv på det frigjorda passet.
+          Efter huvudloopen: elever med kvarvarande val 1–3 försöker placeras på reserv.
+          Räknar även reservval vid rumstorlek (t.ex. många på KRIMINOLOG → större sal).
+          Omflyttning till annan tid om ett pass är fullt.
         </p>
         <label className="auto-place-threshold">
           <span>Tröskel: min antal elever per inspiratör (val 1–3)</span>
@@ -212,8 +258,9 @@ export function AutoPlaceTab({
       </div>
 
       <p className="auto-place-hint">
-        Börja alltid med <strong>Förhandsgranska</strong>. Läs mer under{" "}
-        <code>docs/AUTO_PLACEMENT.md</code> i projektet.
+        Börja alltid med <strong>Förhandsgranska</strong>. Jämför alternativ med{" "}
+        <strong>Omplacera allt</strong> – i läget «Fyll tomma» ändras sällan poäng om schemat
+        redan är fullt.
       </p>
 
       {preview && (
@@ -236,10 +283,29 @@ export function AutoPlaceTab({
               <strong>{preview.slots_created}</strong> nya sessioner (rum + pass)
             </li>
             <li>
-              <strong>{preview.unplaced_count}</strong> val 1–3 utan tidspass
+              <strong>{preview.unplaced_count}</strong> val 1–3 utan matchande pass
             </li>
             <li>
-              Poäng (högre = fler prioriterade val uppfyllda): <strong>{preview.score}</strong>
+              <strong>{preview.missing_pass_count ?? 0}</strong> elever saknar pass 1, 2 eller 3
+            </li>
+            <li>
+              Lunch 2a / 2b: <strong>{preview.lunch_2a ?? 0}</strong> /{" "}
+              <strong>{preview.lunch_2b ?? 0}</strong> elever
+            </li>
+            {(preview.rooms_relocated ?? 0) > 0 && (
+              <li>
+                <strong>{preview.rooms_relocated}</strong> sessioner flyttade till annat rum
+              </li>
+            )}
+            {(preview.reserve_placed_count ?? 0) > 0 && (
+              <li>
+                <strong>{preview.reserve_placed_count}</strong> elever fick reserv på ledigt pass
+              </li>
+            )}
+            <li className="auto-place-score-note">
+              Poäng <strong>{preview.score}</strong> – summerar vikt för uppfyllda val (val 1 = 1000,
+              val 2 = 500, val 3 = 200). Blir ofta lika när alla val 1–3 är placerade; titta på
+              sessioner, lunch och sammanfattningen ovan för skillnader mellan kryssrutor.
             </li>
           </ul>
           <h4>Uppfyllda val per typ</h4>
@@ -261,7 +327,7 @@ export function AutoPlaceTab({
           </table>
           {preview.unplaced_sample.length > 0 && (
             <>
-              <h4>Val 1–3 som saknar ledigt tidspass (max 80)</h4>
+              <h4>Val 1–3 utan matchande inspiratör (max 80)</h4>
               <div className="auto-place-unplaced-scroll">
                 <table className="data-table compact">
                   <thead>

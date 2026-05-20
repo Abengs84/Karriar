@@ -62,6 +62,17 @@ class SystemMeta(Base):
     value = Column(String, nullable=True)
 
 
+class InspiratorRoomLock(Base):
+    """Inspiratör låst till ett rum (alla pass ska använda detta rum)."""
+
+    __tablename__ = "inspirator_room_locks"
+
+    inspiration = Column(String, primary_key=True)
+    room_id = Column(Integer, ForeignKey("rooms.id"), nullable=False)
+
+    room = relationship("Room")
+
+
 class Placement(Base):
     __tablename__ = "placements"
     __table_args__ = (

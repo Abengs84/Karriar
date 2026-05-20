@@ -113,12 +113,29 @@ class SetStudentPassRequest(BaseModel):
     session_slot_id: int | None = None  # None = ta bort placering på passet
 
 
+class InspiratorRoomLockOut(BaseModel):
+    inspiration: str
+    room_id: int
+    room_name: str
+
+
+class InspiratorRoomLocksOut(BaseModel):
+    locks: list[InspiratorRoomLockOut]
+    count: int
+
+
+class InspiratorRoomLocksSetResult(BaseModel):
+    count: int
+
+
 class AutoSolveRequest(BaseModel):
     mode: str = "fill"  # fill | replace
     dry_run: bool = True
-    minimize_sessions_per_inspirator: bool = False
     min_students_threshold: int = Field(default=0, ge=0, le=500)
     try_reserve_for_unplaced: bool = False
+    balance_lunch_tracks: bool = False
+    consolidate_small_groups: bool = True
+    same_room_per_inspirator: bool = False
 
 
 class UnplacedNeedOut(BaseModel):
@@ -133,9 +150,14 @@ class AutoSolveOut(BaseModel):
     placed_new: int
     slots_created: int
     unplaced_count: int
+    missing_pass_count: int = 0
     unplaced_sample: list[UnplacedNeedOut]
     score: int
     by_choice_field: dict[str, int]
     summary: str
     dry_run: bool
     suppressed_inspirators: list[str] = []
+    lunch_2a: int = 0
+    lunch_2b: int = 0
+    rooms_relocated: int = 0
+    reserve_placed_count: int = 0

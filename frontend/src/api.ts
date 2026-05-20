@@ -33,6 +33,7 @@ export type AutoSolveResult = {
   placed_new: number;
   slots_created: number;
   unplaced_count: number;
+  missing_pass_count: number;
   unplaced_sample: {
     student_id: number;
     student_name: string;
@@ -45,6 +46,10 @@ export type AutoSolveResult = {
   summary: string;
   dry_run: boolean;
   suppressed_inspirators: string[];
+  lunch_2a: number;
+  lunch_2b: number;
+  rooms_relocated: number;
+  reserve_placed_count: number;
 };
 
 export type RetentionStatus = {
@@ -218,9 +223,11 @@ export const api = {
     autoSolve: (body: {
       mode: "fill" | "replace";
       dry_run: boolean;
-      minimize_sessions_per_inspirator?: boolean;
       min_students_threshold?: number;
       try_reserve_for_unplaced?: boolean;
+      balance_lunch_tracks?: boolean;
+      consolidate_small_groups?: boolean;
+      same_room_per_inspirator?: boolean;
     }) =>
       json<AutoSolveResult>(`${API}/placements/auto-solve`, {
         method: "POST",

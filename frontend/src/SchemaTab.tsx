@@ -56,13 +56,13 @@ function Pass2BookedCell({
   time: string;
   variant: "2a" | "2b";
 }) {
-  const room = { capacity: slot.room_capacity };
   return (
-    <div className="schema-pass2-block">
-      <span className="schema-pass2-time">
-        {pass2Label(variant, time)}
-      </span>
-      <BookedCell inspiration={slot.inspiration} countLabel={slotLabel(slot, room.capacity)} />
+    <div className={`schema-pass2-block schema-pass2-block-${variant}`}>
+      <div className="schema-cell">
+        <div className="schema-cell-inspiration">{slot.inspiration}</div>
+        <div className="schema-cell-count">{slotLabel(slot, slot.room_capacity)}</div>
+        <span className="schema-pass2-time">{pass2Label(variant, time)}</span>
+      </div>
     </div>
   );
 }

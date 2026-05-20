@@ -220,6 +220,12 @@ tfoot .stats-total-row td {
   color: var(--text);
 }
 
+.stats-total-meta {
+  font-weight: 400;
+  font-size: 0.85em;
+  color: var(--muted);
+}
+
 .badge {
   display: inline-block;
   padding: 0.15rem 0.5rem;
@@ -564,12 +570,25 @@ tfoot .stats-total-row td {
 }
 
 .schema-pass2-block {
-  padding: 0.25rem 0;
+  padding: 0.35rem 0.5rem;
   border-bottom: 1px solid var(--border);
+  border-radius: 4px;
 }
 
 .schema-pass2-block:last-child {
   border-bottom: none;
+}
+
+.schema-pass2-block-2a {
+  background: rgba(45, 106, 79, 0.12);
+}
+
+.schema-pass2-block-2b {
+  background: rgba(185, 28, 28, 0.1);
+}
+
+.schema-pass2-block .schema-cell {
+  padding: 0;
 }
 
 .schema-pass2-time {
@@ -579,7 +598,7 @@ tfoot .stats-total-row td {
   color: var(--muted);
   text-transform: uppercase;
   letter-spacing: 0.02em;
-  margin-bottom: 0.15rem;
+  margin-top: 0.15rem;
 }
 
 .schema-room-toolbar label {
@@ -827,6 +846,8 @@ tfoot .stats-total-row td {
 
   .schema-print-overview .schema-pass2-block {
     padding: 1mm 0;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
   }
 
   .schema-print-rooms .schema-rooms-print,
@@ -1071,6 +1092,13 @@ tfoot .stats-total-row td {
 .auto-place-stats {
   margin: 0.5rem 0 1rem;
   padding-left: 1.25rem;
+}
+
+.auto-place-score-note {
+  margin-top: 0.5rem;
+  max-width: 42rem;
+  color: var(--muted, #555);
+  list-style: disc;
 }
 
 .auto-place-unplaced-scroll {
