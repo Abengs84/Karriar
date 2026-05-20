@@ -5,7 +5,7 @@ from pathlib import Path
 
 from fastapi import Depends, FastAPI, File, HTTPException, Request, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -94,23 +94,32 @@ PUBLIC_API_PATHS = frozenset({
 
 GEO_EXEMPT_PATHS = frozenset({"/api/health"})
 
+_GEO_FORBIDDEN_MSG = "Åtkomst tillåten endast från finska IP-adresser."
+
+
+def _geo_forbidden_response(request: Request) -> Response:
+    if "text/html" in request.headers.get("accept", ""):
+        return HTMLResponse(
+            status_code=403,
+            content=(
+                "<!DOCTYPE html><html lang=sv><meta charset=utf-8>"
+                f"<title>403</title><p>{_GEO_FORBIDDEN_MSG}</p></html>"
+            ),
+        )
+    return JSONResponse(status_code=403, content={"detail": _GEO_FORBIDDEN_MSG})
+
 
 class FinlandIpMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request, call_next):
         if not finland_only_enabled():
             return await call_next(request)
         path = request.url.path
-        if not path.startswith("/api/") or path in GEO_EXEMPT_PATHS:
+        if path in GEO_EXEMPT_PATHS:
             return await call_next(request)
         if request.method == "OPTIONS":
             return await call_next(request)
         if not is_request_from_finland(request):
-            return JSONResponse(
-                status_code=403,
-                content={
-                    "detail": "Åtkomst tillåten endast från finska IP-adresser.",
-                },
-            )
+            return _geo_forbidden_response(request)
         return await call_next(request)
 
 
