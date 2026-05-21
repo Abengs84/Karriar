@@ -11,6 +11,19 @@ export function studentChoices(s: Student): string[] {
   return [s.choice1, s.choice2, s.choice3, s.reserve].filter(Boolean) as string[];
 }
 
+/** Val 1–3 + reserv (unika), för manuell placering under Elever. */
+export function studentPlacementChoices(s: Student): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const val of [s.choice1, s.choice2, s.choice3, s.reserve]) {
+    if (val && !seen.has(val)) {
+      seen.add(val);
+      out.push(val);
+    }
+  }
+  return out;
+}
+
 /** Val 1–3 (reserv räknas inte som oplacerad grupp i schemat). */
 export function studentRequiredChoices(s: Student): string[] {
   const seen = new Set<string>();
@@ -138,6 +151,23 @@ function collectEffectiveInspirations(
   return [...set].sort();
 }
 
+/** Unika elever som syns i oplacerade grupper (samma som backend-räkning). */
+export function countUniqueUnplacedStudents(
+  students: Student[],
+  minStudentsThreshold = 0
+): number {
+  const suppressed = getSuppressedInspirations(students, minStudentsThreshold);
+  const ids = new Set<number>();
+  for (const inspiration of collectEffectiveInspirations(students, suppressed)) {
+    for (const s of students) {
+      if (isUnplacedForInspirator(s, inspiration, suppressed)) {
+        ids.add(s.id);
+      }
+    }
+  }
+  return ids.size;
+}
+
 export function unplacedByInspirator(
   students: Student[],
   minStudentsThreshold = 0
@@ -153,6 +183,67 @@ export function unplacedByInspirator(
     }
   }
   return [...map.entries()].sort((a, b) => b[1].length - a[1].length);
+}
+
+export type AutoPassAssignment = {
+  studentId: number;
+  passType: "pass1" | "pass2" | "pass3";
+  sessionSlotId: number;
+};
+
+const SCHEDULE_PASSES = ["pass1", "pass2", "pass3"] as const;
+
+/** Förslag till automatisk placering i Elever (samma regler som dropdown). */
+export function buildAutoPassAssignments(
+  students: Student[],
+  slotsByPass: Record<"pass1" | "pass2" | "pass3", SessionSlot[]>
+): AutoPassAssignment[] {
+  const cap = new Map<number, number>();
+  for (const key of SCHEDULE_PASSES) {
+    for (const sl of slotsByPass[key]) {
+      cap.set(sl.id, Math.max(0, sl.room_capacity - sl.placed_count));
+    }
+  }
+
+  const out: AutoPassAssignment[] = [];
+  for (const student of students) {
+    const usedInsp = new Set(
+      student.placements
+        .map((p) => p.inspiration)
+        .filter((v): v is string => Boolean(v))
+    );
+
+    for (const passType of SCHEDULE_PASSES) {
+      if (placementAtSchedulePass(student, passType)) continue;
+
+      const choiceOrder = studentPlacementChoices(student);
+      const slot = slotsByPass[passType]
+        .filter((sl) => choiceOrder.includes(sl.inspiration))
+        .filter((sl) => !usedInsp.has(sl.inspiration))
+        .filter((sl) => (cap.get(sl.id) ?? 0) > 0)
+        .sort(
+          (a, b) =>
+            choiceOrder.indexOf(a.inspiration) - choiceOrder.indexOf(b.inspiration)
+        )[0];
+
+      if (!slot) continue;
+
+      out.push({ studentId: student.id, passType, sessionSlotId: slot.id });
+      usedInsp.add(slot.inspiration);
+      cap.set(slot.id, (cap.get(slot.id) ?? 0) - 1);
+    }
+  }
+  return out;
+}
+
+export function countUnplacedSchedulePasses(students: Student[]): number {
+  let n = 0;
+  for (const student of students) {
+    for (const passType of SCHEDULE_PASSES) {
+      if (!placementAtSchedulePass(student, passType)) n += 1;
+    }
+  }
+  return n;
 }
 
 export function placementAtSchedulePass(
@@ -281,8 +372,10 @@ export function splitStudentsForPlacement(
   inspiration: string,
   passType: string,
   roomId?: number,
-  slots?: SessionSlot[]
+  slots?: SessionSlot[],
+  minStudentsThreshold = 0
 ): PlacementEligibility {
+  const suppressed = getSuppressedInspirations(students, minStudentsThreshold);
   const byId = new Map(students.map((s) => [s.id, s]));
   const eligibleIds: number[] = [];
   let skip_already_at_pass = 0;
@@ -306,7 +399,7 @@ export function splitStudentsForPlacement(
   for (const id of studentIds) {
     const s = byId.get(id);
     if (!s) continue;
-    if (!studentChoices(s).includes(inspiration)) {
+    if (!studentChoseForPlacement(s, inspiration, suppressed)) {
       skip_not_chose += 1;
       continue;
     }

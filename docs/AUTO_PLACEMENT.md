@@ -40,8 +40,9 @@ Använd alltid förhandsgranskning först.
 6. **Max tre tidspass per inspiratör** – Pass 1, pass 2 och pass 3. Pass 2 = antingen 2a eller 2b (lunchspår låses vid första session).
 7. **Ett rum per pass och inspiratör** – Samma inspiratör kan inte ligga i två rum samtidigt (samma passtyp). Om rummet är fullt: använd ett **annat tidspass**, inte ett annat rum samma tid.
 8. **Samma rum på flera pass** – Auto-placering försöker lägga samma inspiratör i **samma rum** på pass 1, 2 och 3 när den tiden är ledig i rummet (mjuk prioritering om inget rumslås finns).
-9. **Ett rum per inspiratör (kryssruta)** – Varje inspiratör har **ett** rum för alla pass; rum väljs efter **antal val** (flest val → största lediga sal). Befintliga sessioner flyttas till tilldelat rum. Med *Försök reserv* räknas även reservval in i efterfrågan.
-10. **Ett inspiratörnamn per ruta** – I ett givet rum och passtyp kan bara **en** inspiratör ligga.
+9. **Ett rum per inspiratör (kryssruta)** – Varje inspiratör har **ett** rum för alla pass; rum väljs efter **antal val** (flest val → största lediga sal). Befintliga sessioner flyttas till tilldelat rum. Med *Försök reserv* räknas även reservval in i efterfrågan. Med färre rum än inspiratörer får bara de **mest valda** ett eget rum.
+10. **Prioritera stora grupper (kryssruta, standard på)** – Rumslås och placering sorteras efter **efterfrågan** (antal val 1–3 per inspiratör). Inspiratörer med låg efterfrågan kan flyttas bort från stora sal innan omplacering. Kombinera med **tröskel** för att dölja små inspiratörer helt.
+11. **Ett inspiratörnamn per ruta** – I ett givet rum och passtyp kan bara **en** inspiratör ligga.
 
 ## Hur algoritmen tänker
 
@@ -78,7 +79,7 @@ Pass 2 kan ligga i kolumn **pass 2a** eller **pass 2b** – olika lunchtider. Re
 
 - Om eleven redan har lunchspår **2a** eller **2b** (t.ex. från tidigare manuell placering) behålls det spåret.
 - Annars väljs spåret med **färre elever hittills**, så ungefär **hälften** av eleverna hamnar på 2a och hälften på 2b över hela evenemanget.
-- Med **Balansera lunchspår** planeras olåsta inspiratörer till 2a eller 2b utifrån hur många elever som förväntas behöva pass 2 hos dem, så att lunchfördelningen blir jämnare (varje inspiratör ligger fortfarande bara på ett spår).
+- Med **Balansera lunchspår** planeras olåsta inspiratörer till 2a eller 2b utifrån förväntad elevmängd (minimerar skillnad 2a/2b). Elever får **inte** lunchspår i förväg utifrån fel val – bara inspiratörens planerade spår styr vid pass 2.
 - Om det bara finns plats i ett spår används det som finns (balansen kan då bli skev p.g.a. rumskapacitet).
 
 ### Steg 4 – Förbättringsvarv
@@ -153,8 +154,10 @@ Svaret innehåller `placed_new`, `slots_created`, `unplaced_count`, `score`, `by
 
 1. Importera elever och skapa **alla rum** med rätt kapacitet först.
 2. Kör **Förhandsgranska** och kontrollera statistik-fliken (oplacerade per inspiratör).
-3. Justera manuellt i **Placering** eller **Elever** där det behövs.
-4. Använd **Omplacera allt** bara när du vill börja om från scratch.
+3. Med **få rum** och *Ett rum per inspiratör*: kryssa i **Prioritera stora grupper** och prova **tröskel** (t.ex. 5–10) så små inspiratörer inte tar stora sal.
+4. Grupper större än största sal (t.ex. 64 elever, max 40 platser) kan inte få alla på **ett** pass – de delas på flera tider eller blir delvis oplacerade.
+5. Justera manuellt i **Placering** eller **Elever** där det behövs.
+6. Använd **Omplacera allt** bara när du vill börja om från scratch.
 
 ## Begränsningar (medvetet)
 

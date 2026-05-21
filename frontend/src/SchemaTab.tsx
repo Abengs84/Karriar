@@ -79,7 +79,12 @@ function OverviewTable({
       .map((room) => {
         const pass1 = slotMap.get(`${room.id}-pass1`);
         const pass3 = slotMap.get(`${room.id}-pass3`);
-        const pass2Booked = PASS2_BLOCKS.filter((b) => isBooked(slotMap.get(`${room.id}-${b.passType}`)));
+        const roomSlots = (["pass1", "pass2a", "pass2b", "pass3"] as const)
+          .map((pt) => slotMap.get(`${room.id}-${pt}`))
+          .filter((s): s is SessionSlot => s != null);
+        const pass2Booked = pass2BlocksForDisplay(roomSlots).filter((b) =>
+          isBooked(slotMap.get(`${room.id}-${b.passType}`))
+        );
         const hasPass1 = isBooked(pass1);
         const hasPass3 = isBooked(pass3);
         const hasAny = hasPass1 || hasPass3 || pass2Booked.length > 0;
@@ -161,7 +166,7 @@ function RoomCard({ room, slots }: { room: Room; slots: SessionSlot[] }) {
       <ul className="schema-room-list">
         {PASS_COLUMNS.flatMap((col) => {
           if (col.key === "pass2") {
-            return PASS2_BLOCKS.map((b) => {
+            return pass2BlocksForDisplay(slots).map((b) => {
               const slot = byPass.get(b.passType);
               return (
                 <li key={b.passType}>
@@ -253,6 +258,33 @@ function suggestedLunchTrack(slots: SessionSlot[]): "2a" | "2b" | null {
   return best;
 }
 
+/** Visa båda pass 2 endast om 2a och 2b är bokade; annars ett pass (bokat eller lunchspår). */
+function pass2BlocksForDisplay(slots: SessionSlot[]): typeof PASS2_BLOCKS {
+  const pass2a = slots.find((s) => s.pass_type === "pass2a");
+  const pass2b = slots.find((s) => s.pass_type === "pass2b");
+  const aBooked = isBooked(pass2a);
+  const bBooked = isBooked(pass2b);
+
+  if (aBooked && bBooked) {
+    return PASS2_BLOCKS;
+  }
+  if (aBooked) {
+    return PASS2_BLOCKS.filter((b) => b.variant === "2a");
+  }
+  if (bBooked) {
+    return PASS2_BLOCKS.filter((b) => b.variant === "2b");
+  }
+
+  const track = suggestedLunchTrack(slots);
+  if (track === "2a") {
+    return PASS2_BLOCKS.filter((b) => b.variant === "2a");
+  }
+  if (track === "2b") {
+    return PASS2_BLOCKS.filter((b) => b.variant === "2b");
+  }
+  return [PASS2_BLOCKS[0]];
+}
+
 function bookedPassLabel(count: number): string {
   return count === 1 ? "1 bokat pass" : `${count} bokade pass`;
 }
@@ -261,59 +293,50 @@ type InspiratorScheduleRow =
   | { kind: "pass"; key: string; passType: string; label: string }
   | { kind: "lunch"; key: string; label: string; track: "2a" | "2b" };
 
+function pass2ScheduleRows(blocks: typeof PASS2_BLOCKS): InspiratorScheduleRow[] {
+  return blocks.map((b) => ({
+    kind: "pass" as const,
+    key: b.passType,
+    passType: b.passType,
+    label: pass2Label(b.variant, b.time),
+  }));
+}
+
 function inspiratorScheduleRows(slots: SessionSlot[]): InspiratorScheduleRow[] {
   const track = suggestedLunchTrack(slots);
+  const pass2Blocks = pass2BlocksForDisplay(slots);
+  const pass2Rows = pass2ScheduleRows(pass2Blocks);
+  const lunchRow: InspiratorScheduleRow | null = track
+    ? {
+        kind: "lunch",
+        key: "lunch",
+        label: `Lunch · ${LUNCH_TIMES[track]}`,
+        track,
+      }
+    : null;
+
   const rows: InspiratorScheduleRow[] = [
     { kind: "pass", key: "pass1", passType: "pass1", label: "Pass 1 · 11:00–11:30" },
   ];
 
   if (track === "2b") {
-    rows.push({
-      kind: "lunch",
-      key: "lunch",
-      label: `Lunch · ${LUNCH_TIMES["2b"]}`,
-      track: "2b",
-    });
-    rows.push({
-      kind: "pass",
-      key: "pass2b",
-      passType: "pass2b",
-      label: pass2Label("2b", "12:30–13:00"),
-    });
-    rows.push({
-      kind: "pass",
-      key: "pass2a",
-      passType: "pass2a",
-      label: pass2Label("2a", "11:45–12:15"),
-    });
-  } else if (track === "2a") {
-    rows.push({
-      kind: "pass",
-      key: "pass2a",
-      passType: "pass2a",
-      label: pass2Label("2a", "11:45–12:15"),
-    });
-    rows.push({
-      kind: "lunch",
-      key: "lunch",
-      label: `Lunch · ${LUNCH_TIMES["2a"]}`,
-      track: "2a",
-    });
-    rows.push({
-      kind: "pass",
-      key: "pass2b",
-      passType: "pass2b",
-      label: pass2Label("2b", "12:30–13:00"),
-    });
-  } else {
-    for (const b of PASS2_BLOCKS) {
-      rows.push({
-        kind: "pass",
-        key: b.passType,
-        passType: b.passType,
-        label: pass2Label(b.variant, b.time),
-      });
+    if (lunchRow) rows.push(lunchRow);
+    const order2b: InspiratorScheduleRow[] = [];
+    for (const passType of ["pass2b", "pass2a"] as const) {
+      const row = pass2Rows.find((r) => r.passType === passType);
+      if (row) order2b.push(row);
     }
+    rows.push(...order2b);
+  } else if (track === "2a") {
+    const order2a: InspiratorScheduleRow[] = [];
+    for (const passType of ["pass2a", "pass2b"] as const) {
+      const row = pass2Rows.find((r) => r.passType === passType);
+      if (row) order2a.push(row);
+    }
+    rows.push(...order2a);
+    if (lunchRow) rows.push(lunchRow);
+  } else {
+    rows.push(...pass2Rows);
   }
 
   rows.push({

@@ -1,5 +1,6 @@
 import { useState } from "react";
-import { api, type AutoSolveResult } from "./api";
+import { api, type AutoSolveResult, type Room, type SessionSlot, type Student } from "./api";
+import { DemandHeatmap } from "./DemandHeatmap";
 import type { ToastType } from "./Toast";
 
 const CHOICE_LABELS: Record<string, string> = {
@@ -17,7 +18,7 @@ function formatSessionCount(n: number): string {
 
 function formatUnplacedStatus(
   unplaced_count: number,
-  missing_pass_count: number
+  unplaced_student_count: number
 ): string {
   const parts: string[] = [];
   if (unplaced_count === 0) {
@@ -27,20 +28,24 @@ function formatUnplacedStatus(
   } else {
     parts.push(`${unplaced_count} val 1–3 utan matchande pass.`);
   }
-  if (missing_pass_count === 1) {
-    parts.push("1 elev saknar fortfarande pass 1, 2 eller 3.");
-  } else if (missing_pass_count > 1) {
-    parts.push(`${missing_pass_count} elever saknar fortfarande pass 1, 2 eller 3.`);
+  if (unplaced_student_count === 1) {
+    parts.push(
+      "1 elev saknar fortfarande pass enligt schemat (samma som oplacerade grupper)."
+    );
+  } else if (unplaced_student_count > 1) {
+    parts.push(
+      `${unplaced_student_count} elever saknar fortfarande pass enligt schemat (samma som oplacerade grupper).`
+    );
   }
   return parts.join(" ");
 }
 
 function formatAutoPlaceToast(result: AutoSolveResult, phase: "preview" | "apply"): string {
-  const { placed_new, slots_created, unplaced_count, missing_pass_count } = result;
+  const { placed_new, slots_created, unplaced_count, unplaced_student_count } = result;
   const sessions = formatSessionCount(slots_created);
   const status = formatUnplacedStatus(
     unplaced_count,
-    missing_pass_count ?? 0
+    unplaced_student_count ?? result.missing_pass_count ?? 0
   );
 
   if (phase === "preview") {
@@ -68,6 +73,9 @@ function formatAutoPlaceToast(result: AutoSolveResult, phase: "preview" | "apply
 type Props = {
   studentCount: number;
   roomCount: number;
+  students: Student[];
+  slots: SessionSlot[];
+  rooms: Room[];
   minStudentsThreshold: number;
   onMinStudentsThresholdChange: (value: number) => void;
   onDone: () => Promise<void>;
@@ -77,6 +85,9 @@ type Props = {
 export function AutoPlaceTab({
   studentCount,
   roomCount,
+  students,
+  slots,
+  rooms,
   minStudentsThreshold,
   onMinStudentsThresholdChange,
   onDone,
@@ -87,6 +98,7 @@ export function AutoPlaceTab({
   const [balanceLunchTracks, setBalanceLunchTracks] = useState(true);
   const [consolidateSmallGroups, setConsolidateSmallGroups] = useState(true);
   const [sameRoomPerInspirator, setSameRoomPerInspirator] = useState(false);
+  const [prioritizeHighDemand, setPrioritizeHighDemand] = useState(true);
   const [preview, setPreview] = useState<AutoSolveResult | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -101,6 +113,7 @@ export function AutoPlaceTab({
         balance_lunch_tracks: balanceLunchTracks,
         consolidate_small_groups: consolidateSmallGroups,
         same_room_per_inspirator: sameRoomPerInspirator,
+        prioritize_high_demand: prioritizeHighDemand,
       });
       if (dryRun) {
         setPreview(result);
@@ -118,22 +131,56 @@ export function AutoPlaceTab({
   };
 
   return (
-    <section className="card auto-place-panel">
-      <h2>Automatisk placering</h2>
-      <p className="auto-place-intro">
-        Systemet försöker placera elever på inspiratörspass med så få krockar som möjligt. Val 1
-        vägs tyngst, därefter val 2 och val 3. Reserv kan försökas automatiskt via alternativet nedan.
-        Varje elev och varje inspiratör kan ha högst tre tidspass (pass 1, pass 2 och pass 3).
-        Varje inspiratör ligger på antingen lunch 2a eller 2b. Kryssa i balansering nedan
-        för jämnare fördelning mellan lunchspåren. Utan kryssrutan nedan prioriterar
-        systemet samma rum per inspiratör när det går.
-      </p>
+    <div className="auto-place-page">
+      <section className="card auto-place-settings">
+        <div className="auto-place-settings-head">
+          <div>
+            <h2>Automatisk placering</h2>
+            <p className="meta auto-place-meta">
+              {studentCount} elever · {roomCount} rum
+            </p>
+          </div>
+          <div className="auto-place-actions">
+            <button
+              type="button"
+              className="primary"
+              disabled={busy || roomCount === 0}
+              onClick={() => void run(true)}
+            >
+              Förhandsgranska
+            </button>
+            <button
+              type="button"
+              className="primary"
+              disabled={busy || roomCount === 0}
+              onClick={() => {
+                if (
+                  mode === "replace" &&
+                  !window.confirm(
+                    "Alla befintliga placeringar tas bort och ersätts med systemets förslag. Fortsätta?"
+                  )
+                ) {
+                  return;
+                }
+                void run(false);
+              }}
+            >
+              Verkställ placering
+            </button>
+          </div>
+        </div>
 
-      <p className="meta">
-        {studentCount} elever · {roomCount} rum
-      </p>
+        <details className="auto-place-details">
+          <summary>Hur fungerar det?</summary>
+          <p>
+            Systemet placerar elever på inspiratörspass med så få krockar som möjligt. Val 1 vägs
+            tyngst. Varje elev har högst tre tidspass; pass 2 är antingen 2a eller 2b. Börja med
+            förhandsgranskning innan du verkställer.
+          </p>
+        </details>
 
-      <fieldset className="auto-place-mode">
+        <div className="auto-place-settings-grid">
+        <fieldset className="auto-place-mode">
         <legend>Läge</legend>
         <label>
           <input
@@ -172,6 +219,19 @@ export function AutoPlaceTab({
           Varje inspiratör får ett eget rum för pass 1, 2 och 3. Rum tilldelas efter antal
           val (störst efterfrågan → största sal). Befintliga sessioner flyttas till rätt rum
           vid körning. Utan kryss kan flera inspiratörer dela rum på olika tider.
+        </p>
+        <label>
+          <input
+            type="checkbox"
+            checked={prioritizeHighDemand}
+            onChange={(e) => setPrioritizeHighDemand(e.target.checked)}
+            disabled={busy}
+          />
+          Prioritera stora grupper (efterfrågan)
+        </label>
+        <p className="auto-place-option-hint">
+          Med få rum: de mest valda inspiratörerna får sal först. Låg efterfrågan kan
+          flyttas bort från stora sal. Kombinera med tröskel för att dölja små inspiratörer.
         </p>
         <label>
           <input
@@ -232,30 +292,7 @@ export function AutoPlaceTab({
           berörda elever styrs mot reserv vid auto-placering (en reserv per elev).
         </p>
       </fieldset>
-
-      <div className="auto-place-actions">
-        <button type="button" className="primary" disabled={busy || roomCount === 0} onClick={() => run(true)}>
-          Förhandsgranska
-        </button>
-        <button
-          type="button"
-          className="primary"
-          disabled={busy || roomCount === 0}
-          onClick={() => {
-            if (
-              mode === "replace" &&
-              !window.confirm(
-                "Alla befintliga placeringar tas bort och ersätts med systemets förslag. Fortsätta?"
-              )
-            ) {
-              return;
-            }
-            run(false);
-          }}
-        >
-          Verkställ placering
-        </button>
-      </div>
+        </div>
 
       <p className="auto-place-hint">
         Börja alltid med <strong>Förhandsgranska</strong>. Jämför alternativ med{" "}
@@ -266,6 +303,12 @@ export function AutoPlaceTab({
       {preview && (
         <div className="auto-place-result">
           <h3>{preview.dry_run ? "Förhandsgranskning" : "Resultat"}</h3>
+          {preview.dry_run && (
+            <p className="pool-hint" style={{ marginTop: 0 }}>
+              Siffrorna nedan visar hur det blir <strong>efter</strong> Verkställ placering (ingenting
+              är sparat ännu).
+            </p>
+          )}
           <p>{preview.summary}</p>
           {preview.suppressed_inspirators.length > 0 && (
             <p className="auto-place-suppressed">
@@ -286,7 +329,10 @@ export function AutoPlaceTab({
               <strong>{preview.unplaced_count}</strong> val 1–3 utan matchande pass
             </li>
             <li>
-              <strong>{preview.missing_pass_count ?? 0}</strong> elever saknar pass 1, 2 eller 3
+              <strong>
+                {preview.unplaced_student_count ?? preview.missing_pass_count ?? 0}
+              </strong>{" "}
+              elever i oplacerade grupper (saknar pass enligt schemat)
             </li>
             <li>
               Lunch 2a / 2b: <strong>{preview.lunch_2a ?? 0}</strong> /{" "}
@@ -352,6 +398,20 @@ export function AutoPlaceTab({
           )}
         </div>
       )}
-    </section>
+      </section>
+
+      <section className="card auto-place-heatmap-panel">
+        <DemandHeatmap
+          students={students}
+          slots={slots}
+          rooms={rooms}
+          minStudentsThreshold={minStudentsThreshold}
+          previewSlots={preview?.dry_run ? preview.preview_slots ?? null : null}
+          previewInspiratorStatus={
+            preview?.dry_run ? preview.preview_inspirator_status ?? null : null
+          }
+        />
+      </section>
+    </div>
   );
 }

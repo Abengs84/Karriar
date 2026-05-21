@@ -34,6 +34,7 @@ export type AutoSolveResult = {
   slots_created: number;
   unplaced_count: number;
   missing_pass_count: number;
+  unplaced_student_count: number;
   unplaced_sample: {
     student_id: number;
     student_name: string;
@@ -50,6 +51,15 @@ export type AutoSolveResult = {
   lunch_2b: number;
   rooms_relocated: number;
   reserve_placed_count: number;
+  preview_slots: SessionSlot[] | null;
+  preview_inspirator_status: PreviewInspiratorStatus[] | null;
+};
+
+export type PreviewInspiratorStatus = {
+  inspiration: string;
+  placed: number;
+  unplaced: number;
+  capacity: number;
 };
 
 export type RetentionStatus = {
@@ -179,7 +189,8 @@ export const api = {
       student_ids: number[],
       room_id: number,
       pass_type: string,
-      inspiration: string
+      inspiration: string,
+      min_students_threshold = 0
     ) =>
       json<{
         placed: number;
@@ -191,7 +202,13 @@ export const api = {
       }>(`${API}/placements/at-cell`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ student_ids, room_id, pass_type, inspiration }),
+        body: JSON.stringify({
+          student_ids,
+          room_id,
+          pass_type,
+          inspiration,
+          min_students_threshold,
+        }),
       }),
     bulk: (student_ids: number[], session_slot_id: number) =>
       json<{ placed: number; skipped_capacity: number; skipped_ineligible: number }>(
@@ -228,6 +245,7 @@ export const api = {
       balance_lunch_tracks?: boolean;
       consolidate_small_groups?: boolean;
       same_room_per_inspirator?: boolean;
+      prioritize_high_demand?: boolean;
     }) =>
       json<AutoSolveResult>(`${API}/placements/auto-solve`, {
         method: "POST",

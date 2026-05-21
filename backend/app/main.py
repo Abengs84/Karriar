@@ -24,13 +24,18 @@ from app.auth import (
 from app.database import SessionLocal, get_db, init_db
 from app.helpers import (
     purge_empty_session_slots,
+    purge_invalid_placements,
+    suppressed_inspirations,
     collect_all_inspirations,
     has_placement_at_pass,
     inspirator_pass2_variant_locked,
     is_placed_with_inspirator,
     schedule_pass_key,
     schedule_pass_keys_from_types,
+    count_unique_unplaced_students,
+    effective_required_choices_list,
     student_chose,
+    student_chose_for_placement,
     student_chose_required,
     student_has_full_schedule,
     would_conflict_inspirator_pass2,
@@ -38,7 +43,9 @@ from app.helpers import (
 )
 from app.auto_placer import (
     RoomRef,
+    SlotRef,
     StudentRef,
+    _compute_suppressed,
     apply_solution_to_db,
     run_on_orm,
     solve_auto_placement,
@@ -62,6 +69,7 @@ from app.inspirator_room_locks import (
 from app.schemas import (
     AutoSolveOut,
     AutoSolveRequest,
+    PreviewInspiratorStatusOut,
     BulkPlaceRequest,
     PlaceAtCellRequest,
     ClearStudentsResult,
@@ -427,7 +435,9 @@ def _ensure_inspirator_pass_allowed(
 # --- Session slots ---
 @app.get("/api/session-slots", response_model=list[SessionSlotOut])
 def list_session_slots(pass_type: str | None = None, db: Session = Depends(get_db)):
+    purge_invalid_placements(db)
     purge_empty_session_slots(db)
+    db.commit()
     db.commit()
     q = db.query(SessionSlot).options(
         joinedload(SessionSlot.room),
@@ -604,7 +614,17 @@ def _place_students_in_slot(
     db: Session,
     slot: SessionSlot,
     student_ids: list[int],
+    *,
+    expected_inspiration: str | None = None,
+    min_students_threshold: int = 0,
 ) -> dict:
+    inspiration = expected_inspiration or slot.inspiration
+    if slot.inspiration != inspiration:
+        raise HTTPException(
+            400,
+            f"Rutan har inspiratör «{slot.inspiration}», inte «{inspiration}».",
+        )
+
     current = len(slot.placements)
     remaining = slot.room.capacity - current
     if remaining <= 0:
@@ -612,11 +632,15 @@ def _place_students_in_slot(
 
     to_place = student_ids[:remaining]
     skipped = len(student_ids) - len(to_place)
-    inspiration = slot.inspiration
     placed = 0
     skip_already_at_pass = 0
     skip_already_with_inspirator = 0
     skip_not_chose = 0
+
+    suppressed: set[str] = set()
+    if min_students_threshold > 0:
+        all_students = db.query(Student).all()
+        suppressed = suppressed_inspirations(all_students, min_students_threshold)
 
     for sid in to_place:
         student = (
@@ -627,7 +651,9 @@ def _place_students_in_slot(
         )
         if not student:
             continue
-        if not student_chose(student, inspiration):
+        if not student_chose_for_placement(
+            student, inspiration, suppressed=suppressed or None
+        ):
             skip_not_chose += 1
             continue
         if is_placed_with_inspirator(student, inspiration):
@@ -723,9 +749,16 @@ def place_at_cell(data: PlaceAtCellRequest, db: Session = Depends(get_db)):
             db, data.inspiration, pass_type, data.room_id, exclude_slot_id=slot.id
         )
 
-    result = _place_students_in_slot(db, slot, data.student_ids)
+    result = _place_students_in_slot(
+        db,
+        slot,
+        data.student_ids,
+        expected_inspiration=data.inspiration,
+        min_students_threshold=data.min_students_threshold,
+    )
     db.flush()
-    if result["placed"] == 0:
+    purge_invalid_placements(db)
+    if result["placed"] == 0 and len(slot.placements) == 0:
         db.delete(slot)
     db.commit()
     return result
@@ -800,7 +833,9 @@ def set_student_pass(data: SetStudentPassRequest, db: Session = Depends(get_db))
         if len(slot.placements) >= slot.room.capacity:
             raise HTTPException(400, f"Rummet är fullt ({slot.room.capacity} platser)")
         if not student_chose(student, slot.inspiration):
-            raise HTTPException(400, "Eleven har inte valt denna inspiratör")
+            raise HTTPException(
+                400, "Eleven har inte valt denna inspiratör i val 1–3 eller reserv"
+            )
         db.add(Placement(student_id=student.id, session_slot_id=slot.id))
         if slot.pass_type in ("pass2a", "pass2b"):
             student.lunch_track = "2a" if slot.pass_type == "pass2a" else "2b"
@@ -821,6 +856,130 @@ def set_student_pass(data: SetStudentPassRequest, db: Session = Depends(get_db))
         .first()
     )
     return _student_out(student)
+
+
+def _ref_placed_with_inspirator(student: StudentRef, inspiration: str) -> bool:
+    return inspiration in student.placement_inspirations
+
+
+def _ref_has_full_schedule(student: StudentRef) -> bool:
+    return len(student.placement_pass_keys) >= 3
+
+
+def _ref_unplaced_for_inspirator(
+    student: StudentRef, inspiration: str, suppressed: set[str]
+) -> bool:
+    if not student_chose_for_placement(student, inspiration, suppressed=suppressed):
+        return False
+    if _ref_placed_with_inspirator(student, inspiration):
+        return False
+    if _ref_has_full_schedule(student):
+        return False
+    return True
+
+
+def _preview_slots_out(slots: list[SlotRef], rooms_orm: list[Room]) -> list[SessionSlotOut]:
+    room_by_id = {r.id: r for r in rooms_orm}
+    out: list[SessionSlotOut] = []
+    temp_id = -1
+    for sl in slots:
+        if not sl.student_ids:
+            continue
+        room = room_by_id.get(sl.room_id)
+        if not room:
+            continue
+        slot_id = sl.id if sl.id is not None else temp_id
+        if sl.id is None:
+            temp_id -= 1
+        out.append(
+            SessionSlotOut(
+                id=slot_id,
+                room_id=sl.room_id,
+                pass_type=sl.pass_type,
+                inspiration=sl.inspiration,
+                room_name=room.name,
+                room_capacity=sl.capacity or room.capacity,
+                placed_count=len(sl.student_ids),
+            )
+        )
+    return out
+
+
+def _preview_inspirator_status(
+    students: list[StudentRef],
+    slots: list[SlotRef],
+    min_students_threshold: int,
+) -> list[PreviewInspiratorStatusOut]:
+    suppressed = _compute_suppressed(students, min_students_threshold)
+    inspirations: set[str] = set()
+    for s in students:
+        for insp in effective_required_choices_list(s, suppressed):
+            inspirations.add(insp)
+    for sl in slots:
+        if sl.student_ids:
+            inspirations.add(sl.inspiration)
+
+    rows: list[PreviewInspiratorStatusOut] = []
+    for inspiration in sorted(inspirations):
+        required = sum(
+            1
+            for s in students
+            if student_chose_for_placement(s, inspiration, suppressed=suppressed)
+        )
+        placed = sum(
+            1 for s in students if _ref_placed_with_inspirator(s, inspiration)
+        )
+        unplaced = sum(
+            1
+            for s in students
+            if _ref_unplaced_for_inspirator(s, inspiration, suppressed)
+        )
+        capacity = sum(sl.capacity for sl in slots if sl.inspiration == inspiration)
+        rows.append(
+            PreviewInspiratorStatusOut(
+                inspiration=inspiration,
+                placed=placed,
+                unplaced=unplaced,
+                capacity=capacity,
+            )
+        )
+    return rows
+
+
+def _patch_auto_solve_summary_students(summary: str, student_count: int) -> str:
+    """Ersätt elevräkning i sammanfattningen med siffra som matchar Placering-vyn."""
+    import re
+
+    if student_count <= 0:
+        return re.sub(
+            r" \d+ elever saknar fortfarande ett tidspass\.",
+            "",
+            summary,
+        )
+    phrase = (
+        " 1 elev saknar fortfarande pass enligt schemat "
+        "(samma som oplacerade grupper)."
+        if student_count == 1
+        else (
+            f" {student_count} elever saknar fortfarande pass enligt schemat "
+            "(samma som oplacerade grupper)."
+        )
+    )
+    if re.search(r" elever saknar fortfarande ett tidspass\.", summary):
+        return re.sub(
+            r" \d+ elever saknar fortfarande ett tidspass\.",
+            phrase,
+            summary,
+            count=1,
+        )
+    if re.search(r" 1 elev saknar fortfarande ett tidspass", summary):
+        return re.sub(
+            r" 1 elev saknar fortfarande ett tidspass[^.]*\.",
+            phrase,
+            summary,
+            count=1,
+        )
+    return summary + phrase
 
 
 @app.post("/api/placements/auto-solve", response_model=AutoSolveOut)
@@ -872,7 +1031,7 @@ def auto_solve(data: AutoSolveRequest, db: Session = Depends(get_db)):
             for s in students_orm
         ]
         rooms = [RoomRef(r.id, r.name, r.capacity) for r in rooms_orm]
-        slots: list = []
+        slots = []
         result = solve_auto_placement(
             students,
             rooms,
@@ -883,6 +1042,7 @@ def auto_solve(data: AutoSolveRequest, db: Session = Depends(get_db)):
             consolidate_small_groups=data.consolidate_small_groups,
             room_locks=room_locks,
             exclusive_one_inspirator_per_room=exclusive_rooms,
+            prioritize_high_demand=data.prioritize_high_demand,
         )
     else:
         students, slots, result = run_on_orm(
@@ -895,12 +1055,29 @@ def auto_solve(data: AutoSolveRequest, db: Session = Depends(get_db)):
             consolidate_small_groups=data.consolidate_small_groups,
             room_locks=room_locks,
             exclusive_one_inspirator_per_room=exclusive_rooms,
+            prioritize_high_demand=data.prioritize_high_demand,
         )
 
     if not data.dry_run:
         apply_solution_to_db(db, students_orm, slots)
+        purge_invalid_placements(db)
         purge_empty_session_slots(db)
         db.commit()
+        students_orm = (
+            db.query(Student)
+            .options(
+                joinedload(Student.placements)
+                .joinedload(Placement.session_slot)
+                .joinedload(SessionSlot.room)
+            )
+            .all()
+        )
+        board_unplaced_students = count_unique_unplaced_students(
+            students_orm, data.min_students_threshold
+        )
+    else:
+        # Förhandsgranskning: visa utfallet efter simulering (samma som efter Verkställ).
+        board_unplaced_students = result.unplaced_student_count
 
     student_by_id = {s.id: s for s in students_orm}
     sample = [
@@ -918,21 +1095,34 @@ def auto_solve(data: AutoSolveRequest, db: Session = Depends(get_db)):
         for n in result.unplaced_needs[:80]
     ]
 
+    preview_slots = None
+    preview_inspirator_status = None
+    if data.dry_run:
+        preview_slots = _preview_slots_out(slots, rooms_orm)
+        preview_inspirator_status = _preview_inspirator_status(
+            students, slots, data.min_students_threshold
+        )
+
     return AutoSolveOut(
         placed_new=result.placed_new,
         slots_created=result.slots_created,
         unplaced_count=len(result.unplaced_needs),
-        missing_pass_count=result.missing_pass_count,
+        missing_pass_count=board_unplaced_students,
+        unplaced_student_count=board_unplaced_students,
         unplaced_sample=sample,
         score=result.score,
         by_choice_field=result.by_choice_field,
-        summary=result.summary,
+        summary=_patch_auto_solve_summary_students(
+            result.summary, board_unplaced_students
+        ),
         dry_run=data.dry_run,
         suppressed_inspirators=result.suppressed_inspirators,
         lunch_2a=result.lunch_2a,
         lunch_2b=result.lunch_2b,
         rooms_relocated=result.rooms_relocated,
         reserve_placed_count=result.reserve_placed_count,
+        preview_slots=preview_slots,
+        preview_inspirator_status=preview_inspirator_status,
     )
 
 

@@ -17,6 +17,7 @@ from app.helpers import (
     iter_required_choice_fields,
     schedule_pass_key,
     schedule_pass_keys_from_types,
+    student_chose_required,
 )
 
 SchedulePass = Literal["pass1", "pass2", "pass3"]
@@ -73,31 +74,41 @@ class StudentRef:
     lunch_track: str | None
     # (pass_type, inspiration)
     placements: list[tuple[str, str]] = field(default_factory=list)
+    placement_pass_keys: set[str] = field(init=False, default_factory=set)
+    placement_inspirations: set[str] = field(init=False, default_factory=set)
+    pass_type_by_schedule_key: dict[str, str] = field(
+        init=False, default_factory=dict
+    )
+    _choices_ordered_cache: list[ChoiceRef] = field(init=False, default_factory=list)
+    _required_choices_cache: list[ChoiceRef] = field(init=False, default_factory=list)
 
-    def choices_ordered(self) -> list[ChoiceRef]:
-        out: list[ChoiceRef] = []
+    def __post_init__(self) -> None:
+        self._choices_ordered_cache = []
         for field_name in ("choice1", "choice2", "choice3", "reserve"):
             val = getattr(self, field_name)
             if val:
-                out.append(ChoiceRef(val, CHOICE_RANK[field_name], field_name))
-        return out
+                self._choices_ordered_cache.append(
+                    ChoiceRef(val, CHOICE_RANK[field_name], field_name)
+                )
+        self._required_choices_cache = [
+            ChoiceRef(insp, CHOICE_RANK[field], field)
+            for field, insp in iter_required_choice_fields(self)
+        ]
+        _rebuild_student_placement_indexes(self)
+
+    def choices_ordered(self) -> list[ChoiceRef]:
+        return self._choices_ordered_cache
 
     def has_pass(self, schedule_pass: SchedulePass) -> bool:
         key = "pass2" if schedule_pass == "pass2" else schedule_pass
-        for pt, _ in self.placements:
-            if schedule_pass_key(pt) == key:
-                return True
-        return False
+        return key in self.placement_pass_keys
 
     def has_inspirator(self, inspiration: str) -> bool:
-        return any(insp == inspiration for _, insp in self.placements)
+        return inspiration in self.placement_inspirations
 
     def pass_type_for(self, schedule_pass: SchedulePass) -> str | None:
         key = "pass2" if schedule_pass == "pass2" else schedule_pass
-        for pt, _ in self.placements:
-            if schedule_pass_key(pt) == key:
-                return pt
-        return None
+        return self.pass_type_by_schedule_key.get(key)
 
 
 @dataclass
@@ -114,6 +125,7 @@ class AutoSolveResult:
     slots_created: int
     unplaced_needs: list[UnplacedNeed]
     missing_pass_count: int
+    unplaced_student_count: int
     score: int
     by_choice_field: dict[str, int]
     summary: str
@@ -124,8 +136,28 @@ class AutoSolveResult:
     reserve_placed_count: int = 0
 
 
+def _rebuild_student_placement_indexes(student: StudentRef) -> None:
+    student.placement_pass_keys = set()
+    student.placement_inspirations = set()
+    student.pass_type_by_schedule_key = {}
+    for pass_type, inspiration in student.placements:
+        key = schedule_pass_key(pass_type)
+        student.placement_pass_keys.add(key)
+        student.placement_inspirations.add(inspiration)
+        student.pass_type_by_schedule_key[key] = pass_type
+
+
 def _student_choices_list(s: StudentRef) -> list[ChoiceRef]:
     return s.choices_ordered()
+
+
+def _choice_field_by_inspiration(s: StudentRef) -> dict[str, tuple[str, int]]:
+    lookup: dict[str, tuple[str, int]] = {}
+    for choice in _student_choices_list(s):
+        # Första förekomst (högst rank) ska vinna vid dubletter.
+        if choice.inspiration not in lookup:
+            lookup[choice.inspiration] = (choice.field, choice.rank)
+    return lookup
 
 
 def _load_student_from_orm(student) -> StudentRef:
@@ -162,10 +194,7 @@ def _student_required_inspirations(s: StudentRef) -> set[str]:
 
 def _base_required_choice_refs(s: StudentRef) -> list[ChoiceRef]:
     """Val 1–3; dublett ersätts av reserv."""
-    return [
-        ChoiceRef(insp, CHOICE_RANK[field], field)
-        for field, insp in iter_required_choice_fields(s)
-    ]
+    return s._required_choices_cache
 
 
 def _compute_suppressed(students: list[StudentRef], threshold: int) -> set[str]:
@@ -207,14 +236,18 @@ def _inspirator_demand_counts(
 def locks_by_demand(
     rooms: list[RoomRef],
     demand_counts: dict[str, int],
+    *,
+    max_locks: int | None = None,
 ) -> dict[str, int]:
-    """Tilldelar största lediga rummet till inspiratörer med flest val (ett rum vardera)."""
+    """Tilldelar största lediga rummet till inspiratörer med flest val (högst max_locks)."""
+    limit = len(rooms) if max_locks is None else min(max_locks, len(rooms))
     rooms_sorted = sorted(rooms, key=lambda r: (-r.capacity, r.name))
     used_rooms: set[int] = set()
     locks: dict[str, int] = {}
-    for inspiration, demand in sorted(
-        demand_counts.items(), key=lambda x: (-x[1], x[0])
-    ):
+    ranked = sorted(demand_counts.items(), key=lambda x: (-x[1], x[0]))
+    for inspiration, demand in ranked:
+        if len(locks) >= limit:
+            break
         if demand <= 0:
             continue
         chosen: int | None = None
@@ -233,6 +266,72 @@ def locks_by_demand(
             locks[inspiration] = chosen
             used_rooms.add(chosen)
     return locks
+
+
+def _displace_low_demand_from_locked_rooms(
+    slots: list[SlotRef],
+    rooms: list[RoomRef],
+    room_locks: dict[str, int],
+    demand_counts: dict[str, int],
+    *,
+    low_demand_ceiling: int = 0,
+) -> int:
+    """Flyttar bort låg-efterfrågade inspiratörer från rum reserverade för populära."""
+    if not room_locks:
+        return 0
+
+    priority = set(room_locks.keys())
+    owners = _room_owners_from_slots(slots)
+    occ = _room_pass_occupant(slots)
+    moved = 0
+
+    for holder, locked_rid in room_locks.items():
+        holder_demand = demand_counts.get(holder, 0)
+        owner = owners.get(locked_rid)
+        if owner is None or owner == holder:
+            continue
+        owner_demand = demand_counts.get(owner, 0)
+        if owner in priority and owner_demand >= holder_demand:
+            continue
+        should_displace = owner_demand < holder_demand or (
+            low_demand_ceiling > 0 and owner_demand <= low_demand_ceiling
+        )
+        if not should_displace:
+            continue
+        for slot in list(slots):
+            if slot.room_id != locked_rid or slot.inspiration != owner:
+                continue
+            n = len(slot.student_ids)
+            if n == 0:
+                continue
+            candidates = sorted(
+                [r for r in rooms if r.capacity >= n and r.id != locked_rid],
+                key=lambda r: (r.capacity, r.name),
+            )
+            for room in candidates:
+                key = (room.id, slot.pass_type)
+                occupant = occ.get(key)
+                if occupant is not None and occupant != owner:
+                    continue
+                lock_holder = next(
+                    (insp for insp, rid in room_locks.items() if rid == room.id),
+                    None,
+                )
+                if (
+                    lock_holder
+                    and lock_holder != owner
+                    and demand_counts.get(lock_holder, 0) > owner_demand
+                ):
+                    continue
+                old_key = slot.key
+                if occ.get(old_key) == owner:
+                    del occ[old_key]
+                slot.room_id = room.id
+                slot.capacity = room.capacity
+                occ[slot.key] = owner
+                moved += 1
+                break
+    return moved
 
 
 def _relocate_slots_to_locked_rooms(
@@ -352,11 +451,13 @@ def _room_usable_for_inspiration(
     slots: list[SlotRef],
     *,
     exclusive_room: bool,
+    owners_by_room: dict[int, str] | None = None,
 ) -> bool:
     """Med exklusivt rum: bara ägaren (eller tomt rum) får använda rummet."""
     if not exclusive_room:
         return True
-    owner = _room_owners_from_slots(slots).get(room_id)
+    owners = owners_by_room if owners_by_room is not None else _room_owners_from_slots(slots)
+    owner = owners.get(room_id)
     return owner is None or owner == inspiration
 
 
@@ -418,6 +519,7 @@ def _ordered_rooms_for_inspiration(
 ) -> list[RoomRef]:
     """Rum att prova vid ny session; strikt låst rum om det finns i room_locks."""
     exclusive = exclusive_one_inspirator_per_room
+    owners_by_room = _room_owners_from_slots(slots) if exclusive else None
     locked_id = room_locks.get(inspiration) if room_locks else None
     if locked_id is not None:
         locked_rooms = [
@@ -425,7 +527,11 @@ def _ordered_rooms_for_inspiration(
             for r in rooms
             if r.id == locked_id
             and _room_usable_for_inspiration(
-                r.id, inspiration, slots, exclusive_room=exclusive
+                r.id,
+                inspiration,
+                slots,
+                exclusive_room=exclusive,
+                owners_by_room=owners_by_room,
             )
         ]
         if not locked_rooms:
@@ -451,7 +557,11 @@ def _ordered_rooms_for_inspiration(
         r
         for r in rooms
         if _room_usable_for_inspiration(
-            r.id, inspiration, slots, exclusive_room=exclusive
+            r.id,
+            inspiration,
+            slots,
+            exclusive_room=exclusive,
+            owners_by_room=owners_by_room,
         )
     ]
     eff_group = group_size
@@ -477,11 +587,16 @@ def _preferred_room_for_demand(
     demand = demand_counts.get(inspiration, 0)
     if demand < 8:
         return None
+    owners_by_room = _room_owners_from_slots(slots) if exclusive_one_inspirator_per_room else None
     pool = [
         r
         for r in rooms
         if _room_usable_for_inspiration(
-            r.id, inspiration, slots, exclusive_room=exclusive_one_inspirator_per_room
+            r.id,
+            inspiration,
+            slots,
+            exclusive_room=exclusive_one_inspirator_per_room,
+            owners_by_room=owners_by_room,
         )
     ]
     if not pool:
@@ -530,13 +645,18 @@ def _try_move_session_to_larger_room(
         return False
 
     exclusive = exclusive_one_inspirator_per_room
+    owners_by_room = _room_owners_from_slots(slots) if exclusive else None
     candidates = [
         r
         for r in rooms
         if r.id != slot.room_id
         and r.capacity >= need_capacity
         and _room_usable_for_inspiration(
-            r.id, slot.inspiration, slots, exclusive_room=exclusive
+            r.id,
+            slot.inspiration,
+            slots,
+            exclusive_room=exclusive,
+            owners_by_room=owners_by_room,
         )
     ]
     candidates.sort(
@@ -619,6 +739,10 @@ def _find_slot_for(
     if demand_counts:
         group_size = max(group_size, demand_counts.get(inspiration, 0))
     occ = _room_pass_occupant(slots)
+    slot_by_key = {s.key: s for s in slots}
+    owners_by_room = (
+        _room_owners_from_slots(slots) if exclusive_one_inspirator_per_room else None
+    )
     ordered = _ordered_rooms_for_inspiration(
         rooms,
         inspiration,
@@ -635,13 +759,17 @@ def _find_slot_for(
             if room.capacity < min_capacity:
                 continue
             if not _room_usable_for_inspiration(
-                room.id, inspiration, slots, exclusive_room=exclusive
+                room.id,
+                inspiration,
+                slots,
+                exclusive_room=exclusive,
+                owners_by_room=owners_by_room,
             ):
                 continue
             key = (room.id, pass_type)
             if key in occ and occ[key] != inspiration:
                 continue
-            existing = next((s for s in slots if s.key == key), None)
+            existing = slot_by_key.get(key)
             if existing:
                 if existing.inspiration == inspiration and existing.remaining > 0:
                     return existing
@@ -657,6 +785,7 @@ def _find_slot_for(
             )
             slots.append(new_slot)
             occ[key] = inspiration
+            slot_by_key[key] = new_slot
             insp_pass_keys.add(schedule_pass_key(pass_type))
             return new_slot
     return None
@@ -689,7 +818,10 @@ def _plan_inspirator_pass2_variants(
     for insp, count in sorted(demand.items(), key=lambda x: (-x[1], x[0])):
         if _inspirator_pass2_variant_locked(slots, insp):
             continue
-        if load_2a <= load_2b:
+        # Välj sida som minskar obalansen mest (inte bara vilken som är lägst just nu).
+        skew_if_a = abs((load_2a + count) - load_2b)
+        skew_if_b = abs(load_2a - (load_2b + count))
+        if skew_if_a <= skew_if_b:
             targets[insp] = "pass2a"
             load_2a += count
         else:
@@ -701,32 +833,20 @@ def _plan_inspirator_pass2_variants(
 def _prebalance_pass2_lunch(
     students: list[StudentRef],
     slots: list[SlotRef],
-    inspirator_pass2_targets: dict[str, str] | None = None,
     suppressed: set[str] | None = None,
 ) -> None:
-    """Sätter lunch_track i förväg för elever som saknar pass 2."""
+    """Sätter lunch_track i förväg för elever som saknar pass 2 (utan inspiratörsplan).
+
+    Används bara när balansera lunchspår är av. Med balansering styrs pass 2a/2b
+    per inspiratör via inspirator_pass2_targets – förplanerat lunch_track utifrån
+    elevens högsta val gav ofta fel spår och sämre fördelning.
+    """
     count_2a, count_2b = _pass2_lunch_counts(students, slots)
     need = sorted(
         (s for s in students if not s.has_pass("pass2") and not s.lunch_track),
         key=lambda s: s.id,
     )
     for s in need:
-        if inspirator_pass2_targets:
-            unplaced = [
-                c
-                for c in _required_choices(s, suppressed)
-                if not s.has_inspirator(c.inspiration)
-            ]
-            if unplaced:
-                unplaced.sort(key=lambda c: (-c.rank, c.inspiration))
-                planned = inspirator_pass2_targets.get(unplaced[0].inspiration)
-                if planned:
-                    s.lunch_track = "2a" if planned == "pass2a" else "2b"
-                    if s.lunch_track == "2a":
-                        count_2a += 1
-                    else:
-                        count_2b += 1
-                    continue
         if count_2a <= count_2b:
             s.lunch_track = "2a"
             count_2a += 1
@@ -790,7 +910,6 @@ def _pick_pass2_variant(
         order = ("pass2b", "pass2a")
     else:
         count_2a, count_2b = _pass2_lunch_counts(students, slots)
-        # Fördela ~50/50 mellan lunch 2a och 2b när spåret inte är låst
         if count_2a <= count_2b:
             order = ("pass2a", "pass2b")
         else:
@@ -874,6 +993,10 @@ def _assign(
         return False
     slot.student_ids.append(student.id)
     student.placements.append((pass_type, slot.inspiration))
+    pass_key = schedule_pass_key(pass_type)
+    student.placement_pass_keys.add(pass_key)
+    student.placement_inspirations.add(slot.inspiration)
+    student.pass_type_by_schedule_key[pass_key] = pass_type
     if pass_type in PASS2_VARIANTS:
         student.lunch_track = "2a" if pass_type == "pass2a" else "2b"
     return True
@@ -938,6 +1061,15 @@ def _students_with_unplaced_required(
 
 def _students_missing_schedule_pass(students: list[StudentRef]) -> list[StudentRef]:
     return [s for s in students if not _student_has_full_schedule(s)]
+
+
+def count_students_needing_placement_attention(
+    students: list[StudentRef], suppressed: set[str] | None = None
+) -> int:
+    """Unika elever utan fullt schema eller med kvarvarande val 1–3 (efter placering)."""
+    need_ids = {n.student_id for n in _pending_needs(students, suppressed)}
+    missing_ids = {s.id for s in _students_missing_schedule_pass(students)}
+    return len(need_ids | missing_ids)
 
 
 def _try_fill_empty_schedule_passes(
@@ -1015,6 +1147,7 @@ def _restore_student_slots(
 ) -> None:
     placements, lunch_track, affected = snap
     student.placements = placements
+    _rebuild_student_placement_indexes(student)
     student.lunch_track = lunch_track
     for slot in slots:
         sid = id(slot)
@@ -1049,6 +1182,7 @@ def _unassign_from_slot(
                     slot.student_ids.remove(student.id)
                     break
             del student.placements[i]
+            _rebuild_student_placement_indexes(student)
             if pass_type in PASS2_VARIANTS and not student.has_pass("pass2"):
                 student.lunch_track = None
             return True
@@ -1075,6 +1209,7 @@ def _unassign_at_schedule_pass(
                 slot.student_ids.remove(student.id)
                 break
     del student.placements[remove_idx]
+    _rebuild_student_placement_indexes(student)
     if removed_pt in PASS2_VARIANTS and not student.has_pass("pass2"):
         student.lunch_track = None
     return removed_pt, removed_insp
@@ -1327,13 +1462,18 @@ def _pick_consolidation_target_slot(
 ) -> SlotRef | None:
     """Befintlig eller ny session för inspiratör på valt tidspass."""
     exclusive = exclusive_one_inspirator_per_room
+    owners_by_room = _room_owners_from_slots(slots) if exclusive else None
     matching = [
         s
         for s in slots
         if s.inspiration == insp
         and schedule_pass_key(s.pass_type) == schedule_pass
         and _room_usable_for_inspiration(
-            s.room_id, insp, slots, exclusive_room=exclusive
+            s.room_id,
+            insp,
+            slots,
+            exclusive_room=exclusive,
+            owners_by_room=owners_by_room,
         )
     ]
     if matching:
@@ -1565,22 +1705,24 @@ def _try_reserve_for_unplaced(
 
 
 def _student_difficulty(
-    student: StudentRef, suppressed: set[str] | None = None
-) -> tuple[int, int]:
-    remaining = sum(
-        1
+    student: StudentRef,
+    suppressed: set[str] | None = None,
+    demand_counts: dict[str, int] | None = None,
+) -> tuple[int, int, int]:
+    unplaced = [
+        c
         for c in _required_choices(student, suppressed)
         if not student.has_inspirator(c.inspiration)
-    )
-    max_rank = max(
-        (
-            c.rank
-            for c in _required_choices(student, suppressed)
-            if not student.has_inspirator(c.inspiration)
-        ),
-        default=0,
-    )
-    return (remaining, max_rank)
+    ]
+    remaining = len(unplaced)
+    max_rank = max((c.rank for c in unplaced), default=0)
+    max_demand = 0
+    if demand_counts:
+        max_demand = max(
+            (demand_counts.get(c.inspiration, 0) for c in unplaced),
+            default=0,
+        )
+    return (max_demand, remaining, max_rank)
 
 
 def solve_auto_placement(
@@ -1594,6 +1736,7 @@ def solve_auto_placement(
     consolidate_small_groups: bool = True,
     room_locks: dict[str, int] | None = None,
     exclusive_one_inspirator_per_room: bool = False,
+    prioritize_high_demand: bool = True,
 ) -> AutoSolveResult:
     """Kör heuristiken. Muterar students/slots in-place."""
     minimize_sessions_per_inspirator = consolidate_small_groups
@@ -1605,8 +1748,17 @@ def solve_auto_placement(
         suppressed,
         include_reserve=try_reserve_for_unplaced,
     )
+    displaced_low_demand = 0
     if exclusive_one_inspirator_per_room:
-        room_locks = locks_by_demand(rooms, demand_counts)
+        room_locks = locks_by_demand(rooms, demand_counts, max_locks=len(rooms))
+        if prioritize_high_demand:
+            displaced_low_demand = _displace_low_demand_from_locked_rooms(
+                slots,
+                rooms,
+                room_locks,
+                demand_counts,
+                low_demand_ceiling=min_students_threshold,
+            )
         moved = _relocate_slots_to_locked_rooms(slots, rooms, room_locks)
     else:
         moved = 0
@@ -1616,7 +1768,8 @@ def solve_auto_placement(
             placed_new=0,
             slots_created=0,
             unplaced_needs=_pending_needs(students, suppressed),
-            missing_pass_count=len(_students_missing_schedule_pass(students)),
+            missing_pass_count=0,
+            unplaced_student_count=0,
             score=0,
             by_choice_field={},
             summary="Inga rum – skapa rum först.",
@@ -1632,14 +1785,14 @@ def solve_auto_placement(
                 inspirator_pass2_targets = _plan_inspirator_pass2_variants(
                     students, slots, suppressed
                 )
-            _prebalance_pass2_lunch(
-                students, slots, inspirator_pass2_targets, suppressed
-            )
-        ordered = sorted(
-            students,
-            key=lambda s: _student_difficulty(s, suppressed),
-            reverse=True,
+            else:
+                _prebalance_pass2_lunch(students, slots, suppressed)
+        difficulty_key = (
+            (lambda s: _student_difficulty(s, suppressed, demand_counts))
+            if prioritize_high_demand
+            else (lambda s: _student_difficulty(s, suppressed))
         )
+        ordered = sorted(students, key=difficulty_key, reverse=True)
         for student in ordered:
             pick = _best_choice_for_pass(
                 student, schedule_pass, slots, rooms, students,
@@ -1665,12 +1818,24 @@ def solve_auto_placement(
                 _assign(student, slot, pass_type)
 
     # Andra pass: försök fylla kvarvarande behov på vilken tid som helst
+    student_by_id = {s.id: s for s in students}
     for _ in range(3):
         improved = False
         needs = _pending_needs(students, suppressed)
-        needs.sort(key=lambda n: (-n.rank, n.inspiration))
+        if prioritize_high_demand:
+            needs.sort(
+                key=lambda n: (
+                    -demand_counts.get(n.inspiration, 0),
+                    -n.rank,
+                    n.inspiration,
+                )
+            )
+        else:
+            needs.sort(key=lambda n: (-n.rank, n.inspiration))
         for need in needs:
-            student = next(s for s in students if s.id == need.student_id)
+            student = student_by_id.get(need.student_id)
+            if student is None:
+                continue
             if student.has_inspirator(need.inspiration):
                 continue
             for schedule_pass in PASS_ORDER:
@@ -1777,23 +1942,26 @@ def solve_auto_placement(
     unplaced = _pending_needs(students, suppressed)
     if reserve_fallback_ids:
         unplaced = [n for n in unplaced if n.student_id not in reserve_fallback_ids]
-    score = sum(
-        c.rank
-        for s in students
-        for c in _student_choices_list(s)
-        if s.has_inspirator(c.inspiration)
-    )
+    score = 0
     by_field: dict[str, int] = {f: 0 for f in CHOICE_RANK}
     for s in students:
-        for _pt, insp in s.placements:
-            for c in _student_choices_list(s):
-                if c.inspiration == insp:
-                    by_field[c.field] = by_field.get(c.field, 0) + 1
-                    break
+        for choice in _student_choices_list(s):
+            if choice.inspiration in s.placement_inspirations:
+                score += choice.rank
+        choice_lookup = _choice_field_by_inspiration(s)
+        for insp in s.placement_inspirations:
+            field_rank = choice_lookup.get(insp)
+            if not field_rank:
+                continue
+            field, _rank = field_rank
+            by_field[field] = by_field.get(field, 0) + 1
 
     unplaced_count = len(unplaced)
     missing_pass = _students_missing_schedule_pass(students)
     missing_pass_count = len(missing_pass)
+    unplaced_student_count = count_students_needing_placement_attention(
+        students, suppressed
+    )
     reserve_count = len(reserve_fallback_ids)
     if unplaced_count == 0:
         if reserve_count:
@@ -1837,8 +2005,18 @@ def solve_auto_placement(
         summary += (
             f" Ett rum per inspiratör ({n} tilldelade efter efterfrågan"
             + (f", {moved} sessioner flyttade" if moved else "")
+            + (
+                f", {displaced_low_demand} låg-efterfrågade sessioner omplacerade"
+                if displaced_low_demand
+                else ""
+            )
             + ")."
         )
+        if prioritize_high_demand and n < len(rooms):
+            summary += (
+                f" Bara {len(rooms)} rum – endast de {n} mest valda inspiratörerna"
+                " får eget rum."
+            )
     elif try_reserve_for_unplaced and demand_counts:
         top = max(demand_counts.values(), default=0)
         if top >= 8:
@@ -1850,6 +2028,7 @@ def solve_auto_placement(
         slots_created=slots_created,
         unplaced_needs=unplaced,
         missing_pass_count=missing_pass_count,
+        unplaced_student_count=unplaced_student_count,
         score=score,
         by_choice_field=by_field,
         summary=summary,
@@ -1872,6 +2051,7 @@ def run_on_orm(
     consolidate_small_groups: bool = True,
     room_locks: dict[str, int] | None = None,
     exclusive_one_inspirator_per_room: bool = False,
+    prioritize_high_demand: bool = True,
 ) -> tuple[list[StudentRef], list[SlotRef], AutoSolveResult]:
     students = [_load_student_from_orm(s) for s in students_orm]
     rooms = [RoomRef(r.id, r.name, r.capacity) for r in rooms_orm]
@@ -1884,6 +2064,7 @@ def run_on_orm(
         consolidate_small_groups=consolidate_small_groups,
         room_locks=room_locks,
         exclusive_one_inspirator_per_room=exclusive_one_inspirator_per_room,
+        prioritize_high_demand=prioritize_high_demand,
     )
     return students, slots, result
 
@@ -1931,12 +2112,22 @@ def apply_solution_to_db(db, students_orm, slots: list[SlotRef]) -> int:
 
         slot_id_map[(slot.room_id, slot.pass_type, slot.inspiration)] = db_slot.id
 
+        existing_n = (
+            db.query(Placement)
+            .filter(Placement.session_slot_id == db_slot.id)
+            .count()
+        )
+        if existing_n == 0 and db_slot.inspiration != slot.inspiration:
+            db_slot.inspiration = slot.inspiration
+
         for sid in slot.student_ids:
             key = (sid, db_slot.id)
             if key in existing_pairs:
                 continue
             student = student_by_id.get(sid)
             if not student:
+                continue
+            if not student_chose_required(student, db_slot.inspiration):
                 continue
             db.add(Placement(student_id=sid, session_slot_id=db_slot.id))
             if slot.pass_type in PASS2_VARIANTS:

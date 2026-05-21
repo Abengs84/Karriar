@@ -6,35 +6,29 @@ from app.models import Room
 # Bekräftade Karriär-rum med kapacitet.
 KARRIAR_CONFIRMED_ROOMS: list[tuple[str, int]] = [
     ("Akademisalen", 355),
-    ("Auditorium Bruhn", 99),
-    ("B215", 30),
-    ("B216", 30),
+    ("Aud Bruhn", 99),
+    ("C214", 24),
     ("B529", 20),
-    ("B624", 22),
     ("B625", 22),
-    ("C214", 30),
-    ("C215", 30),
-    ("C608", 30),
-    ("D402", 55),
-    ("D404", 25),
-    ("D405", 35),
-    ("D406", 24),
-    ("D505", 24),
-    ("D508", 30),
-    ("D701", 30),
     ("E610", 34),
-    ("E716", 30),
-    ("F406", 30),
-    ("F506", 15),
-    ("F507", 15),
-    ("F606", 40),
-    ("F612", 30),
     ("F724", 24),
+    ("F606", 40),
+    ("F506", 20),
+    ("F507", 20),
+    ("C215", 30),
+    ("C608", 40),
+    ("B216", 16),
+    ("D701", 20),
+    ("E716", 40),
+    ("F612", 12),
+    ("F406", 24),
+    ("B429", 24),
+    ("D302", 18),
 ]
 
 # Tidigare namn → nytt (vid omstart)
 ROOM_RENAMES: dict[str, str] = {
-    "Aud Bruhn": "Auditorium Bruhn",
+    "Auditorium Bruhn": "Aud Bruhn",
 }
 
 

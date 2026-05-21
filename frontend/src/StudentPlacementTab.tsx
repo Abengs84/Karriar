@@ -1,6 +1,13 @@
 import { useEffect, useMemo, useState } from "react";
 import { api, SessionSlot, Student } from "./api";
-import { placementAtSchedulePass, schedulePassKey, studentChoices } from "./placementUtils";
+import {
+  buildAutoPassAssignments,
+  countUnplacedSchedulePasses,
+  placementAtSchedulePass,
+  schedulePassKey,
+  studentHasFullSchedule,
+  studentPlacementChoices,
+} from "./placementUtils";
 
 const PASS_ROWS = [
   { key: "pass1" as const, label: "Pass 1", time: "11:00–11:30" },
@@ -13,7 +20,7 @@ type Props = {
   slots: SessionSlot[];
   highlightStudentId?: number | null;
   onHighlightClear?: () => void;
-  onRefresh: () => Promise<void>;
+  onRefresh: () => Promise<void | { students: Student[]; slots: SessionSlot[] }>;
   showMsg: (type: "error" | "success", text: string) => void;
 };
 
@@ -32,6 +39,8 @@ export function StudentPlacementTab({
 }: Props) {
   const [schoolFilter, setSchoolFilter] = useState("");
   const [search, setSearch] = useState("");
+  const [onlyUnplacedPasses, setOnlyUnplacedPasses] = useState(false);
+  const [autoFilling, setAutoFilling] = useState(false);
   const [savingId, setSavingId] = useState<number | null>(null);
   const [focusedId, setFocusedId] = useState<number | null>(null);
 
@@ -84,6 +93,7 @@ export function StudentPlacementTab({
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
     return students.filter((s) => {
+      if (onlyUnplacedPasses && studentHasFullSchedule(s)) return false;
       if (schoolFilter && s.school !== schoolFilter) return false;
       if (q) {
         const name = `${s.first_name} ${s.last_name}`.toLowerCase();
@@ -91,7 +101,61 @@ export function StudentPlacementTab({
       }
       return true;
     });
-  }, [students, schoolFilter, search]);
+  }, [students, schoolFilter, search, onlyUnplacedPasses]);
+
+  const autoFillUnplaced = async () => {
+    const unplacedCells = countUnplacedSchedulePasses(students);
+    if (unplacedCells === 0) {
+      showMsg("success", "Alla elever har redan pass 1, 2 och 3.");
+      return;
+    }
+
+    const assignments = buildAutoPassAssignments(students, slotsByPass);
+    if (assignments.length === 0) {
+      showMsg(
+        "error",
+        "Inget oplacerat pass kunde matchas mot elevens val i dropdown (lediga platser eller pass i schemat saknas)."
+      );
+      return;
+    }
+
+    setAutoFilling(true);
+    let placed = 0;
+    let failed = 0;
+    try {
+      for (const a of assignments) {
+        try {
+          await api.placements.setStudentPass(a.studentId, a.passType, a.sessionSlotId);
+          placed += 1;
+        } catch {
+          failed += 1;
+        }
+      }
+      await onRefresh();
+
+      const noOption = unplacedCells - assignments.length;
+      const parts: string[] = [];
+      if (placed > 0) {
+        parts.push(
+          `Placerade ${placed} pass utifrån elevens val (högsta prioritet först, lediga platser).`
+        );
+      }
+      if (noOption > 0) {
+        parts.push(
+          `${noOption} oplacerat pass hade inget lämpligt alternativ i dropdown.`
+        );
+      }
+      if (failed > 0) {
+        parts.push(`${failed} placering${failed === 1 ? "" : "ar"} misslyckades (t.ex. fullt rum).`);
+      }
+      showMsg(placed > 0 ? "success" : "error", parts.join(" "));
+    } catch (err) {
+      showMsg("error", err instanceof Error ? err.message : "Automatisk placering misslyckades");
+      await onRefresh();
+    } finally {
+      setAutoFilling(false);
+    }
+  };
 
   const changePass = async (
     student: Student,
@@ -125,7 +189,8 @@ export function StudentPlacementTab({
     <div className="card student-pass-tab">
       <h2>Elever – individuella pass</h2>
       <p className="pool-hint" style={{ marginTop: 0 }}>
-        Visa varje elevs val och välj rum/pass. Endast sessioner som skapats under Placering visas i listorna.
+        Visa varje elevs val och välj rum/pass. Listorna visar sessioner för elevens val 1–3 och
+        reserv (om de finns i schemat under Placering).
       </p>
 
       <div className="form-row student-pass-filters">
@@ -149,6 +214,29 @@ export function StudentPlacementTab({
             onChange={(e) => setSearch(e.target.value)}
           />
         </label>
+        <label className="student-pass-filter-check" title="Döljer elever som redan har pass 1, 2 och 3">
+          <input
+            type="checkbox"
+            checked={onlyUnplacedPasses}
+            onChange={(e) => setOnlyUnplacedPasses(e.target.checked)}
+          />
+          Visa bara elever med oplacerat pass
+        </label>
+      </div>
+
+      <div className="student-pass-actions">
+        <button
+          type="button"
+          className="primary"
+          disabled={autoFilling || savingId !== null}
+          onClick={() => void autoFillUnplaced()}
+        >
+          {autoFilling ? "Placerar…" : "Placera oplacerade pass automatiskt"}
+        </button>
+        <p className="student-pass-action-hint">
+          Går igenom alla elever och väljer första lediga pass i dropdown (val 1 → reserv, utan
+          samma inspiratör två gånger).
+        </p>
       </div>
 
       <p style={{ fontSize: "0.85rem", color: "var(--muted)", margin: "0 0 0.75rem" }}>
@@ -203,9 +291,14 @@ export function StudentPlacementTab({
                 </td>
                 {PASS_ROWS.map((p) => {
                   const current = placementAtSchedulePass(s, p.key);
-                  let options = slotsByPass[p.key].filter((sl) =>
-                    studentChoices(s).includes(sl.inspiration)
-                  );
+                  const choiceOrder = studentPlacementChoices(s);
+                  let options = slotsByPass[p.key]
+                    .filter((sl) => choiceOrder.includes(sl.inspiration))
+                    .sort(
+                      (a, b) =>
+                        choiceOrder.indexOf(a.inspiration) -
+                        choiceOrder.indexOf(b.inspiration)
+                    );
                   if (current) {
                     const curSlot = slots.find((sl) => sl.id === current.session_slot_id);
                     if (curSlot && !options.some((o) => o.id === curSlot.id)) {
@@ -217,7 +310,7 @@ export function StudentPlacementTab({
                     <td key={p.key} className={unplaced ? "pass-cell-unplaced" : undefined}>
                       <select
                         className="pass-select"
-                        disabled={savingId === s.id}
+                        disabled={savingId === s.id || autoFilling}
                         value={current?.session_slot_id ?? ""}
                         onChange={(e) => {
                           const v = e.target.value;

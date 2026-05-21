@@ -252,6 +252,9 @@ export default function App() {
           <AutoPlaceTab
             studentCount={students.length}
             roomCount={rooms.length}
+            students={students}
+            slots={slots}
+            rooms={rooms}
             minStudentsThreshold={minStudentsThreshold}
             onMinStudentsThresholdChange={updateMinStudentsThreshold}
             onDone={refresh}
@@ -278,7 +281,7 @@ export default function App() {
             slots={slots}
             highlightStudentId={highlightStudentId}
             onHighlightClear={() => setHighlightStudentId(null)}
-            onRefresh={refresh}
+            onRefresh={refreshPlacement}
             showMsg={showMsg}
           />
         )}
@@ -423,7 +426,7 @@ function ImportTab({
       <h2>Importera Excel</h2>
       <p style={{ color: "var(--muted)", fontSize: "0.9rem" }}>
         Kolumner: A = timestamp, B = efternamn, C = förnamn, D = skola, E–G = INSPIRATIONSTRÄFF 1–3, H = INSPIRATIONSTRÄFF - RESERV.
-        Format: &quot;Ekonom – Cecilia Ruotsala&quot;. Dubbletter (samma namn + skola) hoppas över.
+        Format: &quot;Ekonom – Cecilia Ruotsala&quot;. Vid dubbletter i filen (samma namn + skola) används raden med senaste timestamp.
       </p>
       <input type="file" accept=".xlsx,.xls" onChange={handleFile} />
     </div>

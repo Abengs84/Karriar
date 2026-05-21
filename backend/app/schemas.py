@@ -72,6 +72,7 @@ class PlaceAtCellRequest(BaseModel):
     room_id: int
     pass_type: str
     inspiration: str
+    min_students_threshold: int = 0
 
 
 class InspiratorStat(BaseModel):
@@ -136,6 +137,7 @@ class AutoSolveRequest(BaseModel):
     balance_lunch_tracks: bool = False
     consolidate_small_groups: bool = True
     same_room_per_inspirator: bool = False
+    prioritize_high_demand: bool = True
 
 
 class UnplacedNeedOut(BaseModel):
@@ -146,11 +148,19 @@ class UnplacedNeedOut(BaseModel):
     rank: int
 
 
+class PreviewInspiratorStatusOut(BaseModel):
+    inspiration: str
+    placed: int
+    unplaced: int
+    capacity: int
+
+
 class AutoSolveOut(BaseModel):
     placed_new: int
     slots_created: int
     unplaced_count: int
     missing_pass_count: int = 0
+    unplaced_student_count: int = 0
     unplaced_sample: list[UnplacedNeedOut]
     score: int
     by_choice_field: dict[str, int]
@@ -161,3 +171,5 @@ class AutoSolveOut(BaseModel):
     lunch_2b: int = 0
     rooms_relocated: int = 0
     reserve_placed_count: int = 0
+    preview_slots: list[SessionSlotOut] | None = None
+    preview_inspirator_status: list[PreviewInspiratorStatusOut] | None = None

@@ -27,6 +27,7 @@ import {
   inspiratorBookedElsewhereAtPass,
   resolvePlacementPassType,
   splitStudentsForPlacement,
+  countUniqueUnplacedStudents,
   unplacedByInspirator,
 } from "./placementUtils";
 import type { ToastType } from "./Toast";
@@ -168,6 +169,10 @@ export function PlacementBoard({
   }
 
   const groups = unplacedByInspirator(students, minStudentsThreshold);
+  const uniqueUnplacedStudents = countUniqueUnplacedStudents(
+    students,
+    minStudentsThreshold
+  );
 
   const dropMenuRef = useRef(dropMenu);
   dropMenuRef.current = dropMenu;
@@ -185,10 +190,13 @@ export function PlacementBoard({
     async (
       studentIds: number[],
       cell: { roomId: number; passType: string },
-      inspiration: string
+      inspiration: string,
+      maxToPlace?: number
     ) => {
       setDropMenu(null);
-      if (placingLockRef.current || studentIds.length === 0) return;
+      const ids =
+        maxToPlace != null ? studentIds.slice(0, Math.max(0, maxToPlace)) : studentIds;
+      if (placingLockRef.current || ids.length === 0) return;
 
       placingLockRef.current = true;
       const apiPassType =
@@ -197,14 +205,15 @@ export function PlacementBoard({
           : resolvePlacementPassType(cell.passType, slots, inspiration);
       try {
         dndDebug("API POST /placements/at-cell …", {
-          count: studentIds.length,
+          count: ids.length,
           passType: apiPassType,
         });
         const result = await api.placements.atCell(
-          studentIds,
+          ids,
           cell.roomId,
           apiPassType,
-          inspiration
+          inspiration,
+          minStudentsThreshold
         );
         dndDebug("API svar", { ...result });
 
@@ -388,7 +397,8 @@ export function PlacementBoard({
       group.inspiration,
       cell.passType,
       cell.roomId,
-      slots
+      slots,
+      minStudentsThreshold
     );
 
     if (split.inspirator_double_booked) {
@@ -470,7 +480,7 @@ export function PlacementBoard({
     }
 
     if (conflictCount === 0) {
-      await executePlacement(split.eligibleIds, cell, group.inspiration);
+      await executePlacement(split.eligibleIds, cell, group.inspiration, fitsInRoom);
       return;
     }
 
@@ -506,7 +516,13 @@ export function PlacementBoard({
     >
       <div className="placement-board">
         <PoolDropColumn dragging={dragGroup != null}>
-          <h3>Oplacerade grupper ({groups.length})</h3>
+          <h3>
+            Oplacerade grupper ({groups.length}
+            {uniqueUnplacedStudents > 0
+              ? ` · ${uniqueUnplacedStudents} elever`
+              : ""}
+            )
+          </h3>
           <p className="pool-hint">
             Dra en grupp till en ruta i schemat. Släpp tillbaka här för att ångra. Varje elev kan
             bara ha ett pass per tid. Varje inspiratör kan ligga på högst tre tidspass (pass 1, 2
@@ -575,6 +591,7 @@ export function PlacementBoard({
                               students={students}
                               slots={slots}
                               dragGroup={dragGroup}
+                              minStudentsThreshold={minStudentsThreshold}
                               onContextMenuSlot={(e, slot) => {
                                 e.preventDefault();
                                 e.stopPropagation();
@@ -589,6 +606,7 @@ export function PlacementBoard({
                               students={students}
                               slots={slots}
                               dragGroup={dragGroup}
+                              minStudentsThreshold={minStudentsThreshold}
                               onContextMenuSlot={(e, slot) => {
                                 e.preventDefault();
                                 e.stopPropagation();
@@ -626,7 +644,12 @@ export function PlacementBoard({
           <button
             type="button"
             onClick={() =>
-              executePlacement(dropMenu.eligibleIds, dropMenu.cell, dropMenu.inspiration)
+              executePlacement(
+                dropMenu.eligibleIds,
+                dropMenu.cell,
+                dropMenu.inspiration,
+                dropMenu.fitsInRoom
+              )
             }
           >
             Placera {dropMenu.fitsInRoom} elev{dropMenu.fitsInRoom === 1 ? "" : "er"} utan krock
@@ -719,6 +742,7 @@ function Pass2GridCell({
   students,
   slots,
   dragGroup,
+  minStudentsThreshold,
   onContextMenuSlot,
 }: {
   room: Room;
@@ -727,6 +751,7 @@ function Pass2GridCell({
   students: Student[];
   slots: SessionSlot[];
   dragGroup: { inspiration: string; ids: number[] } | null;
+  minStudentsThreshold: number;
   onContextMenuSlot: (e: React.MouseEvent, slot: SessionSlot) => void;
 }) {
   const { setNodeRef, isOver } = useDroppable({
@@ -742,7 +767,8 @@ function Pass2GridCell({
       dragGroup.inspiration,
       "pass2",
       room.id,
-      slots
+      slots,
+      minStudentsThreshold
     );
     dropTone =
       split.inspirator_double_booked || split.eligibleIds.length !== dragGroup.ids.length
@@ -819,6 +845,7 @@ function GridCell({
   students,
   slots,
   dragGroup,
+  minStudentsThreshold,
   onContextMenuSlot,
 }: {
   room: Room;
@@ -827,6 +854,7 @@ function GridCell({
   students: Student[];
   slots: SessionSlot[];
   dragGroup: { inspiration: string; ids: number[] } | null;
+  minStudentsThreshold: number;
   onContextMenuSlot: (e: React.MouseEvent, slot: SessionSlot) => void;
 }) {
   const { setNodeRef, isOver } = useDroppable({
@@ -846,7 +874,8 @@ function GridCell({
       dragGroup.inspiration,
       passType,
       room.id,
-      slots
+      slots,
+      minStudentsThreshold
     );
     dropTone =
       split.inspirator_double_booked || split.eligibleIds.length !== dragGroup.ids.length

@@ -1,5 +1,7 @@
 """Shared logic for inspiratör-val vs faktiska tidspass."""
 
+from sqlalchemy.orm import joinedload
+
 from app.models import Student
 
 PASS2_TYPES = frozenset({"pass2a", "pass2b"})
@@ -56,12 +58,96 @@ def student_chose_required(student: Student, inspiration: str) -> bool:
     return inspiration in student_required_choices(student)
 
 
+def effective_required_choices_list(
+    student: Student, suppressed: set[str]
+) -> list[str]:
+    """Val 1–3; undertröskel-inspiratörer ersätts av reserv (en gång per elev)."""
+    out: list[str] = []
+    reserve_used = False
+    in_out: set[str] = set()
+    for insp in student_required_choices_list(student):
+        if insp in suppressed:
+            reserve = student.reserve
+            if (
+                not reserve_used
+                and reserve
+                and reserve not in suppressed
+                and reserve not in in_out
+            ):
+                out.append(reserve)
+                reserve_used = True
+                in_out.add(reserve)
+            continue
+        out.append(insp)
+        in_out.add(insp)
+    return out
+
+
+def student_chose_for_placement(
+    student: Student,
+    inspiration: str,
+    *,
+    suppressed: set[str] | None = None,
+) -> bool:
+    """Samma logik som oplacerade grupper i frontend (val 1–3 + tröskel/reserv)."""
+    if suppressed:
+        return inspiration in effective_required_choices_list(student, suppressed)
+    return student_chose_required(student, inspiration)
+
+
 def is_placed_with_inspirator(student: Student, inspiration: str) -> bool:
     for p in student.placements:
         slot = p.session_slot
         if slot and slot.inspiration == inspiration:
             return True
     return False
+
+
+def is_unplaced_for_inspirator(
+    student: Student,
+    inspiration: str,
+    *,
+    suppressed: set[str] | None = None,
+) -> bool:
+    """Samma logik som oplacerade grupper i Placering-fliken."""
+    if not student_chose_for_placement(student, inspiration, suppressed=suppressed):
+        return False
+    if is_placed_with_inspirator(student, inspiration):
+        return False
+    if student_has_full_schedule(student):
+        return False
+    return True
+
+
+def collect_effective_inspirations(
+    students: list[Student], suppressed: set[str]
+) -> list[str]:
+    result: set[str] = set()
+    for student in students:
+        for insp in effective_required_choices_list(student, suppressed):
+            result.add(insp)
+    return sorted(result)
+
+
+def unique_unplaced_student_ids(
+    students: list[Student], min_students_threshold: int = 0
+) -> set[int]:
+    """Unika elever som syns i oplacerade grupper (samma som Placering-vyn)."""
+    suppressed = suppressed_inspirations(students, min_students_threshold)
+    ids: set[int] = set()
+    for inspiration in collect_effective_inspirations(students, suppressed):
+        for student in students:
+            if is_unplaced_for_inspirator(
+                student, inspiration, suppressed=suppressed
+            ):
+                ids.add(student.id)
+    return ids
+
+
+def count_unique_unplaced_students(
+    students: list[Student], min_students_threshold: int = 0
+) -> int:
+    return len(unique_unplaced_student_ids(students, min_students_threshold))
 
 
 def schedule_pass_key(pass_type: str) -> str:
@@ -174,6 +260,32 @@ def count_required_inspiration_choices(students: list[Student]) -> dict[str, int
         for insp in student_required_choices(s):
             counts[insp] = counts.get(insp, 0) + 1
     return counts
+
+
+def purge_invalid_placements(db) -> int:
+    """Tar bort placeringar där eleven inte valt inspiratören (val 1–3 eller reserv)."""
+    from app.models import Placement
+
+    rows = (
+        db.query(Placement)
+        .options(
+            joinedload(Placement.student),
+            joinedload(Placement.session_slot),
+        )
+        .all()
+    )
+    removed = 0
+    for placement in rows:
+        slot = placement.session_slot
+        student = placement.student
+        if not slot or not student:
+            continue
+        if not student_chose(student, slot.inspiration):
+            db.delete(placement)
+            removed += 1
+    if removed:
+        db.flush()
+    return removed
 
 
 def purge_empty_session_slots(db) -> int:

@@ -1001,14 +1001,72 @@ tfoot .stats-total-row td {
 }
 
 /* Auto placement */
-.auto-place-panel {
-  max-width: 720px;
+.auto-place-page {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  margin-bottom: 1rem;
 }
 
-.auto-place-intro {
-  color: var(--muted);
-  line-height: 1.5;
+.auto-place-page .card {
+  margin-bottom: 0;
+}
+
+.auto-place-settings-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
   margin-bottom: 0.75rem;
+}
+
+.auto-place-settings-head h2 {
+  margin: 0 0 0.25rem;
+}
+
+.auto-place-meta {
+  margin: 0;
+}
+
+.auto-place-details {
+  margin-bottom: 0.85rem;
+  font-size: 0.9rem;
+  color: var(--muted);
+}
+
+.auto-place-details summary {
+  cursor: pointer;
+  font-weight: 600;
+  color: var(--text, #1a1a1a);
+}
+
+.auto-place-details p {
+  margin: 0.5rem 0 0;
+  line-height: 1.5;
+  max-width: 52rem;
+}
+
+.auto-place-settings-grid {
+  display: grid;
+  grid-template-columns: minmax(12rem, 1fr) minmax(0, 2fr);
+  gap: 1rem;
+  align-items: start;
+}
+
+@media (max-width: 900px) {
+  .auto-place-settings-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .auto-place-settings-head {
+    flex-direction: column;
+  }
+}
+
+.auto-place-heatmap-panel {
+  padding: 1rem 1.15rem 1.15rem;
+  overflow: visible;
 }
 
 .auto-place-mode {
@@ -1075,7 +1133,7 @@ tfoot .stats-total-row td {
   display: flex;
   flex-wrap: wrap;
   gap: 0.5rem;
-  margin-bottom: 0.75rem;
+  flex-shrink: 0;
 }
 
 .auto-place-hint {
@@ -1106,6 +1164,275 @@ tfoot .stats-total-row td {
   overflow: auto;
   border: 1px solid var(--border);
   border-radius: 8px;
+}
+
+.demand-heatmap {
+  width: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+.heatmap-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem 1.25rem;
+  margin-bottom: 0.5rem;
+}
+
+.heatmap-header h3 {
+  margin: 0;
+  font-size: 1.1rem;
+}
+
+.heatmap-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+
+.heatmap-legend li {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.heatmap-swatch {
+  width: 0.85rem;
+  height: 0.85rem;
+  border-radius: 3px;
+  display: inline-block;
+}
+
+.heatmap-swatch-c1 {
+  background: hsla(214, 58%, 46%, 0.75);
+}
+
+.heatmap-swatch-c2 {
+  background: hsla(248, 58%, 46%, 0.75);
+}
+
+.heatmap-swatch-c3 {
+  background: hsla(278, 58%, 46%, 0.75);
+}
+
+.heatmap-swatch-res {
+  background: hsla(38, 58%, 46%, 0.75);
+}
+
+.heatmap-swatch-room {
+  background: hsla(168, 40%, 88%, 1);
+  border: 1px solid hsla(168, 42%, 38%, 0.45);
+}
+
+.heatmap-intro {
+  margin: 0 0 0.75rem;
+  font-size: 0.85rem;
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+.heatmap-table-wrap {
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.heatmap-table {
+  width: 100%;
+  table-layout: fixed;
+  border-collapse: collapse;
+  font-size: 0.84rem;
+}
+
+.heatmap-table th,
+.heatmap-table td {
+  padding: 0.4rem 0.45rem;
+  border-bottom: 1px solid var(--border);
+  border-right: 1px solid var(--border);
+  text-align: center;
+  vertical-align: middle;
+}
+
+.heatmap-table th:last-child,
+.heatmap-table td:last-child {
+  border-right: none;
+}
+
+.heatmap-table tbody tr:nth-child(even) td:not([style*="background"]) {
+  background: rgba(0, 0, 0, 0.02);
+}
+
+.heatmap-table thead th {
+  background: var(--surface, #f0f1f3);
+  font-weight: 600;
+  font-size: 0.78rem;
+  padding: 0.5rem 0.4rem;
+}
+
+.heatmap-table th:nth-child(2),
+.heatmap-table th:nth-child(3),
+.heatmap-table th:nth-child(4),
+.heatmap-table th:nth-child(5),
+.heatmap-table td:nth-child(2),
+.heatmap-table td:nth-child(3),
+.heatmap-table td:nth-child(4),
+.heatmap-table td:nth-child(5) {
+  width: 3.25rem;
+}
+
+.heatmap-table th:nth-child(6),
+.heatmap-table th:nth-child(7),
+.heatmap-table th:nth-child(8),
+.heatmap-table td:nth-child(6),
+.heatmap-table td:nth-child(7),
+.heatmap-table td:nth-child(8) {
+  width: 4rem;
+}
+
+.heatmap-insp-col {
+  text-align: left;
+  width: 16%;
+  min-width: 10rem;
+  font-weight: 500;
+  line-height: 1.25;
+  vertical-align: top;
+  padding-top: 0.45rem;
+  padding-bottom: 0.45rem;
+}
+
+.heatmap-insp-field {
+  display: block;
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  color: var(--muted);
+}
+
+.heatmap-insp-person {
+  display: block;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--text, #1a1a1a);
+  margin-top: 0.1rem;
+}
+
+.heatmap-rooms-col-head {
+  width: auto;
+  text-align: left;
+}
+
+.heatmap-rooms-col {
+  text-align: left;
+  vertical-align: top;
+  padding: 0.35rem 0.5rem;
+}
+
+.heatmap-rooms-empty {
+  color: var(--muted);
+  text-align: center;
+}
+
+.heatmap-rooms-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  justify-content: flex-start;
+}
+
+.heatmap-room-chip {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.1rem;
+  padding: 0.2rem 0.45rem;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  font-size: 0.72rem;
+  line-height: 1.2;
+}
+
+.heatmap-room-chip-name {
+  font-weight: 700;
+}
+
+.heatmap-room-chip-passes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.15rem;
+}
+
+.heatmap-room-pass {
+  font-size: 0.65rem;
+  font-weight: 600;
+  padding: 0 0.15rem;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.7);
+}
+
+.heatmap-no-rooms {
+  margin: 0.5rem 0 0;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.heatmap-empty {
+  margin: 0;
+  font-size: 0.95rem;
+}
+
+.heatmap-row-suppressed {
+  opacity: 0.42;
+}
+
+.heatmap-warn {
+  color: var(--warn, #b45309);
+  font-weight: 700;
+}
+
+.demand-heatmap-preview .heatmap-table-wrap {
+  box-shadow: 0 0 0 2px hsla(214, 70%, 50%, 0.2);
+}
+
+.heatmap-preview-badge {
+  font-size: 0.78rem;
+  font-weight: 700;
+  padding: 0.2rem 0.55rem;
+  border-radius: 999px;
+  background: hsla(214, 65%, 94%, 1);
+  color: hsla(214, 55%, 32%, 1);
+  border: 1px solid hsla(214, 50%, 70%, 0.6);
+}
+
+.heatmap-swatch-new {
+  background: hsla(152, 50%, 88%, 1);
+  border: 2px solid hsla(152, 45%, 38%, 0.85);
+}
+
+.heatmap-swatch-changed {
+  background: hsla(38, 70%, 90%, 1);
+  border: 2px solid hsla(32, 55%, 42%, 0.85);
+}
+
+.heatmap-room-chip-new {
+  box-shadow: 0 0 0 2px hsla(152, 45%, 40%, 0.55);
+}
+
+.heatmap-room-chip-changed {
+  box-shadow: 0 0 0 2px hsla(38, 60%, 45%, 0.55);
+}
+
+.heatmap-cell-preview {
+  outline: 1px dashed hsla(214, 50%, 55%, 0.35);
+  outline-offset: -1px;
 }
 
 .data-table.compact th,
@@ -1363,6 +1690,30 @@ tfoot .stats-total-row td {
 /* Student pass tab */
 .student-pass-tab .student-pass-filters {
   margin-bottom: 1rem;
+}
+
+.student-pass-tab .student-pass-filter-check {
+  flex-direction: row;
+  align-items: center;
+  gap: 0.4rem;
+  align-self: center;
+  cursor: pointer;
+  color: var(--text);
+}
+
+.student-pass-tab .student-pass-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem;
+  margin-bottom: 0.75rem;
+}
+
+.student-pass-tab .student-pass-action-hint {
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--muted);
+  max-width: 36rem;
 }
 
 .student-pass-table-wrap {
