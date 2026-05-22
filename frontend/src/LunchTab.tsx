@@ -1,9 +1,11 @@
-import { useMemo } from "react";
-import { Student } from "./api";
+import { useMemo, useState } from "react";
+import { api, LunchRebalanceResult, Student } from "./api";
 
 type Props = {
   students: Student[];
   onStudentClick: (studentId: number) => void;
+  onRefresh: () => Promise<void>;
+  showMsg: (type: "success" | "error", text: string) => void;
 };
 
 type LunchTrack = "2a" | "2b";
@@ -38,7 +40,17 @@ function compareStudents(a: Student, b: Student): number {
   return a.first_name.localeCompare(b.first_name, "sv");
 }
 
-export function LunchTab({ students, onStudentClick }: Props) {
+function formatMove(m: LunchRebalanceResult["moves"][0]): string {
+  if (m.kind === "swap" && m.inspiration_b) {
+    return `${m.room_name}: byt lunchspår mellan «${m.inspiration}» (${m.student_count} el.) och «${m.inspiration_b}» (${m.student_count_b} el.)`;
+  }
+  return `${m.room_name}: «${m.inspiration}» flyttas från lunch ${m.from_track} → ${m.to_track} (${m.student_count} el.)`;
+}
+
+export function LunchTab({ students, onStudentClick, onRefresh, showMsg }: Props) {
+  const [preview, setPreview] = useState<LunchRebalanceResult | null>(null);
+  const [busy, setBusy] = useState(false);
+
   const { byTrack, unassigned } = useMemo(() => {
     const byTrack: Record<LunchTrack, Student[]> = { "2a": [], "2b": [] };
     const unassigned: Student[] = [];
@@ -55,6 +67,40 @@ export function LunchTab({ students, onStudentClick }: Props) {
 
   const totalAssigned = byTrack["2a"].length + byTrack["2b"].length;
 
+  const suggestRebalance = async () => {
+    setBusy(true);
+    try {
+      const result = await api.lunch.rebalance(true);
+      setPreview(result);
+      showMsg(
+        result.moves.length > 0 ? "success" : "error",
+        result.summary
+      );
+    } catch (err) {
+      showMsg("error", err instanceof Error ? err.message : "Kunde inte beräkna förslag");
+      setPreview(null);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const applyRebalance = async () => {
+    if (!preview?.moves.length) return;
+    setBusy(true);
+    try {
+      const result = await api.lunch.rebalance(false);
+      setPreview(result);
+      await onRefresh();
+      showMsg("success", result.summary);
+    } catch (err) {
+      showMsg("error", err instanceof Error ? err.message : "Kunde inte verkställa");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const clearPreview = () => setPreview(null);
+
   return (
     <div className="card lunch-tab">
       <h2>Lunch</h2>
@@ -63,6 +109,69 @@ export function LunchTab({ students, onStudentClick }: Props) {
         <strong>{totalAssigned}</strong> elever med tilldelat lunchspår av{" "}
         {students.length}.
       </p>
+
+      <div className="lunch-rebalance-actions">
+        <button
+          type="button"
+          className="primary"
+          disabled={busy}
+          onClick={() => void suggestRebalance()}
+        >
+          {busy && !preview ? "Beräknar…" : "Föreslå omfördelning"}
+        </button>
+        {preview && preview.moves.length > 0 && (
+          <>
+            <button
+              type="button"
+              className="primary"
+              disabled={busy}
+              onClick={() => void applyRebalance()}
+            >
+              {busy ? "Verkställer…" : "Verkställ omfördelning"}
+            </button>
+            <button type="button" disabled={busy} onClick={clearPreview}>
+              Avbryt
+            </button>
+          </>
+        )}
+        {preview && preview.moves.length === 0 && (
+          <button type="button" disabled={busy} onClick={clearPreview}>
+            Stäng
+          </button>
+        )}
+      </div>
+      <p className="lunch-rebalance-hint">
+        Flyttar hela pass-2-sessioner mellan 2a och 2b (samma rum och inspiratör) så att
+        lunchspåren blir jämnare. Påverkar inte pass 1 eller pass 3.
+      </p>
+
+      {preview && (
+        <section className="lunch-rebalance-preview" aria-live="polite">
+          <h3>Förslag på omfördelning</h3>
+          <p className="lunch-rebalance-summary">{preview.summary}</p>
+          <div className="lunch-rebalance-counts">
+            <span>
+              Spår 2a: {preview.lunch_2a_before} → <strong>{preview.lunch_2a_after}</strong>
+            </span>
+            <span>
+              Spår 2b: {preview.lunch_2b_before} → <strong>{preview.lunch_2b_after}</strong>
+            </span>
+          </div>
+          {preview.moves.length > 0 ? (
+            <ol className="lunch-rebalance-moves">
+              {preview.moves.map((m, i) => (
+                <li key={`${m.kind}-${m.session_slot_id}-${m.session_slot_id_b ?? i}`}>
+                  {formatMove(m)}
+                </li>
+              ))}
+            </ol>
+          ) : (
+            preview.blocked_reason && (
+              <p className="lunch-rebalance-blocked">{preview.blocked_reason}</p>
+            )
+          )}
+        </section>
+      )}
 
       <div className="lunch-summary">
         {TRACKS.map(({ track, lunchTime }) => (

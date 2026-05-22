@@ -30,6 +30,7 @@ from app.helpers import (
     has_placement_at_pass,
     inspirator_pass2_variant_locked,
     is_placed_with_inspirator,
+    is_unplaced_for_inspirator,
     schedule_pass_key,
     schedule_pass_keys_from_types,
     count_unique_unplaced_students,
@@ -37,11 +38,11 @@ from app.helpers import (
     student_chose,
     student_chose_for_placement,
     student_chose_required,
-    student_has_full_schedule,
     would_conflict_inspirator_pass2,
     would_exceed_inspirator_pass_limit,
 )
 from app.auto_placer import (
+    count_unique_unplaced_students_ref,
     RoomRef,
     SlotRef,
     StudentRef,
@@ -60,7 +61,12 @@ from app.retention import (
     retention_worker,
     schedule_purge_after_import,
 )
-from app.pdf_generator import generate_school_pdf
+from app.pdf_generator import (
+    generate_school_pdf,
+    generate_school_pdf_one_per_page,
+    generate_student_pdf,
+)
+from app.lunch_balance import apply_lunch_rebalance, plan_lunch_rebalance
 from app.inspirator_room_locks import (
     clear_room_locks,
     list_room_locks,
@@ -81,6 +87,9 @@ from app.schemas import (
     InspiratorRoomLocksSetResult,
     InspiratorStat,
     LunchTrackUpdate,
+    LunchRebalanceOut,
+    LunchRebalanceMoveOut,
+    LunchRebalanceRequest,
     PlacementOut,
     RoomCreate,
     RoomOut,
@@ -543,6 +552,56 @@ def update_lunch_track(
     return {"ok": True}
 
 
+def _lunch_rebalance_out(result, *, dry_run: bool, applied: bool) -> LunchRebalanceOut:
+    return LunchRebalanceOut(
+        dry_run=dry_run,
+        lunch_2a_before=result.lunch_2a_before,
+        lunch_2b_before=result.lunch_2b_before,
+        lunch_2a_after=result.lunch_2a_after,
+        lunch_2b_after=result.lunch_2b_after,
+        moves=[
+            LunchRebalanceMoveOut(
+                kind=m.kind,
+                session_slot_id=m.session_slot_id,
+                session_slot_id_b=m.session_slot_id_b,
+                inspiration=m.inspiration,
+                inspiration_b=m.inspiration_b,
+                room_name=m.room_name,
+                from_track=m.from_track,
+                to_track=m.to_track,
+                student_count=m.student_count,
+                student_count_b=m.student_count_b,
+                net_delta=m.net_delta,
+            )
+            for m in result.moves
+        ],
+        summary=result.summary,
+        applied=applied,
+        blocked_reason=result.blocked_reason,
+    )
+
+
+@app.post("/api/lunch/rebalance", response_model=LunchRebalanceOut)
+def lunch_rebalance(data: LunchRebalanceRequest, db: Session = Depends(get_db)):
+    purge_invalid_placements(db)
+    purge_empty_session_slots(db)
+    db.commit()
+    try:
+        plan = plan_lunch_rebalance(db)
+    except Exception as e:
+        raise HTTPException(400, str(e)) from e
+    if data.dry_run or not plan.moves:
+        return _lunch_rebalance_out(plan, dry_run=data.dry_run, applied=False)
+    try:
+        apply_lunch_rebalance(db, plan.moves)
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(400, f"Kunde inte verkställa: {e}") from e
+    after = plan_lunch_rebalance(db)
+    after.summary = plan.summary + " Verkställt."
+    return _lunch_rebalance_out(after, dry_run=False, applied=True)
+
+
 # --- Import ---
 @app.post("/api/import/excel", response_model=ImportResult)
 async def import_excel(file: UploadFile = File(...), db: Session = Depends(get_db)):
@@ -587,10 +646,7 @@ def inspirator_stats(db: Session = Depends(get_db)):
             1 for s in required if is_placed_with_inspirator(s, inspiration)
         )
         unplaced_n = sum(
-            1
-            for s in required
-            if not is_placed_with_inspirator(s, inspiration)
-            and not student_has_full_schedule(s)
+            1 for s in required if is_unplaced_for_inspirator(s, inspiration)
         )
         result.append(
             InspiratorStat(
@@ -1042,6 +1098,7 @@ def auto_solve(data: AutoSolveRequest, db: Session = Depends(get_db)):
             consolidate_small_groups=data.consolidate_small_groups,
             room_locks=room_locks,
             exclusive_one_inspirator_per_room=exclusive_rooms,
+            hybrid_room_when_short=data.hybrid_room_when_short and exclusive_rooms,
             prioritize_high_demand=data.prioritize_high_demand,
         )
     else:
@@ -1055,9 +1112,11 @@ def auto_solve(data: AutoSolveRequest, db: Session = Depends(get_db)):
             consolidate_small_groups=data.consolidate_small_groups,
             room_locks=room_locks,
             exclusive_one_inspirator_per_room=exclusive_rooms,
+            hybrid_room_when_short=data.hybrid_room_when_short and exclusive_rooms,
             prioritize_high_demand=data.prioritize_high_demand,
         )
 
+    db_unplaced_students = 0
     if not data.dry_run:
         apply_solution_to_db(db, students_orm, slots)
         purge_invalid_placements(db)
@@ -1075,9 +1134,15 @@ def auto_solve(data: AutoSolveRequest, db: Session = Depends(get_db)):
         board_unplaced_students = count_unique_unplaced_students(
             students_orm, data.min_students_threshold
         )
+        db_unplaced_students = board_unplaced_students
     else:
-        # Förhandsgranskning: visa utfallet efter simulering (samma som efter Verkställ).
-        board_unplaced_students = result.unplaced_student_count
+        suppressed_set = set(result.suppressed_inspirators)
+        board_unplaced_students = count_unique_unplaced_students_ref(
+            students, suppressed_set
+        )
+        db_unplaced_students = count_unique_unplaced_students(
+            students_orm, data.min_students_threshold
+        )
 
     student_by_id = {s.id: s for s in students_orm}
     sample = [
@@ -1123,6 +1188,7 @@ def auto_solve(data: AutoSolveRequest, db: Session = Depends(get_db)):
         reserve_placed_count=result.reserve_placed_count,
         preview_slots=preview_slots,
         preview_inspirator_status=preview_inspirator_status,
+        db_unplaced_student_count=db_unplaced_students if data.dry_run else None,
     )
 
 
@@ -1163,6 +1229,56 @@ def pdf_for_school(school_name: str, db: Session = Depends(get_db)):
         raise HTTPException(404, "Inga elever för denna skola")
     pdf_bytes = generate_school_pdf(students)
     safe_name = school_name.replace(" ", "_")
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": f'attachment; filename="karriar_{safe_name}.pdf"'
+        },
+    )
+
+
+@app.get("/api/pdf/school/{school_name}/one-per-page")
+def pdf_for_school_one_per_page(school_name: str, db: Session = Depends(get_db)):
+    students = (
+        db.query(Student)
+        .options(
+            joinedload(Student.placements)
+            .joinedload(Placement.session_slot)
+            .joinedload(SessionSlot.room)
+        )
+        .filter(Student.school == school_name)
+        .all()
+    )
+    if not students:
+        raise HTTPException(404, "Inga elever för denna skola")
+    pdf_bytes = generate_school_pdf_one_per_page(students)
+    safe_name = school_name.replace(" ", "_")
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": f'attachment; filename="karriar_{safe_name}_en_per_sida.pdf"'
+        },
+    )
+
+
+@app.get("/api/pdf/student/{student_id}")
+def pdf_for_student(student_id: int, db: Session = Depends(get_db)):
+    student = (
+        db.query(Student)
+        .options(
+            joinedload(Student.placements)
+            .joinedload(Placement.session_slot)
+            .joinedload(SessionSlot.room)
+        )
+        .filter(Student.id == student_id)
+        .first()
+    )
+    if not student:
+        raise HTTPException(404, "Eleven hittades inte")
+    pdf_bytes = generate_student_pdf(student)
+    safe_name = f"{student.last_name}_{student.first_name}".replace(" ", "_")
     return Response(
         content=pdf_bytes,
         media_type="application/pdf",

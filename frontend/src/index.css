@@ -346,6 +346,62 @@ tfoot .stats-total-row td {
   margin-left: auto;
 }
 
+.lunch-rebalance-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-bottom: 0.35rem;
+}
+
+.lunch-rebalance-hint {
+  font-size: 0.85rem;
+  color: var(--muted);
+  margin: 0 0 1rem;
+}
+
+.lunch-rebalance-preview {
+  background: var(--accent-light);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.85rem 1rem;
+  margin-bottom: 1rem;
+}
+
+.lunch-rebalance-preview h3 {
+  font-size: 1rem;
+  margin-bottom: 0.35rem;
+}
+
+.lunch-rebalance-summary {
+  margin: 0 0 0.5rem;
+  font-size: 0.9rem;
+}
+
+.lunch-rebalance-counts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1.25rem;
+  font-size: 0.9rem;
+  margin-bottom: 0.65rem;
+}
+
+.lunch-rebalance-moves {
+  margin: 0;
+  padding-left: 1.25rem;
+  font-size: 0.88rem;
+  line-height: 1.45;
+}
+
+.lunch-rebalance-moves li + li {
+  margin-top: 0.25rem;
+}
+
+.lunch-rebalance-blocked {
+  margin: 0;
+  font-size: 0.88rem;
+  color: var(--warn);
+}
+
 .lunch-tab-lead {
   color: var(--muted);
   font-size: 0.9rem;
@@ -505,6 +561,122 @@ tfoot .stats-total-row td {
   color: var(--muted);
   font-size: 0.9rem;
   margin: 0.5rem 0 0.75rem;
+}
+
+.schema-student-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 0.75rem 1rem;
+  margin-top: 0.75rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--border);
+}
+
+.schema-student-toolbar label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: 0.85rem;
+}
+
+.schema-student-toolbar select {
+  min-width: 12rem;
+}
+
+.schema-print-student {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 1rem 0;
+}
+
+.schema-student-card {
+  width: 100%;
+  max-width: 520px;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.schema-student-header,
+.schema-student-lower {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.schema-student-spacer {
+  display: none;
+}
+
+.schema-student-name {
+  margin: 0;
+  text-align: right;
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: var(--muted);
+}
+
+.schema-student-silhouette {
+  width: 100%;
+  height: auto;
+  object-fit: contain;
+  margin: 0.25rem 0;
+}
+
+.schema-student-event {
+  margin: 0;
+  font-weight: 700;
+  font-size: 0.95rem;
+  letter-spacing: 0.02em;
+}
+
+.schema-student-schedule {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+
+.schema-student-schedule th {
+  width: 7.5rem;
+  padding: 0.45rem 0.5rem;
+  text-align: left;
+  font-weight: 600;
+  vertical-align: top;
+  white-space: nowrap;
+}
+
+.schema-student-schedule td {
+  padding: 0.45rem 0.6rem;
+  vertical-align: top;
+}
+
+.schema-student-schedule tr.stripe td,
+.schema-student-schedule tr.stripe th {
+  background: #e8e8e8;
+}
+
+.schema-student-inspiration {
+  display: block;
+  font-weight: 500;
+}
+
+.schema-student-room {
+  display: block;
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.schema-student-text {
+  font-weight: 500;
+}
+
+.schema-student-footer {
+  width: 100%;
+  height: auto;
+  margin-top: 0.5rem;
 }
 
 .schema-view-toggle {
@@ -772,7 +944,7 @@ tfoot .stats-total-row td {
     max-height: none !important;
     box-sizing: border-box;
     max-width: 100%;
-    padding: 0 2mm;
+    padding: 0 2mm 5mm;
   }
 
   .schema-print-overview .schedule-grid.schema-grid {
@@ -782,6 +954,7 @@ tfoot .stats-total-row td {
     box-sizing: border-box;
     font-size: 9pt;
     border-collapse: collapse;
+    margin-bottom: 1px;
   }
 
   .schema-print-overview .schedule-grid.schema-grid thead {
@@ -894,6 +1067,98 @@ tfoot .stats-total-row td {
   .schema-print-inspirators .schema-room-insp {
     word-break: break-word;
     overflow-wrap: anywhere;
+  }
+
+  html,
+  body,
+  #root,
+  .main,
+  .schema-tab,
+  .schema-print-area.schema-print-student {
+    width: 100% !important;
+    max-width: 100% !important;
+  }
+
+  .schema-print-student {
+    display: flex !important;
+    flex-direction: column !important;
+    align-items: center !important;
+    padding: 0 !important;
+    box-sizing: border-box !important;
+  }
+
+  .schema-print-student .schema-print-header,
+  .schema-print-student .schema-section-title {
+    display: none !important;
+  }
+
+  .schema-print-student .schema-student-card {
+    width: 100%;
+    max-width: 186mm;
+    min-height: 273mm;
+    margin: 0 auto;
+    box-sizing: border-box;
+    display: flex !important;
+    flex-direction: column !important;
+    page-break-inside: avoid;
+    break-inside: avoid;
+  }
+
+  .schema-print-student .schema-student-spacer {
+    display: block;
+    flex: 1 1 auto;
+    min-height: 6mm;
+  }
+
+  .schema-print-student .schema-student-header {
+    flex: 0 0 auto;
+    gap: 4mm;
+  }
+
+  .schema-print-student .schema-student-silhouette {
+    margin: 2mm 0;
+  }
+
+  .schema-print-student .schema-student-lower {
+    flex: 0 0 auto;
+    display: flex;
+    flex-direction: column;
+    gap: 2.5mm;
+  }
+
+  .schema-print-student .schema-student-event {
+    margin: 0 0 1mm;
+  }
+
+  .schema-print-student .schema-student-footer {
+    width: 65%;
+    max-width: 118mm;
+    margin: 25mm auto 0 !important;
+    flex-shrink: 0;
+    align-self: center;
+  }
+
+  .schema-print-student .schema-student-name {
+    font-size: 9pt;
+  }
+
+  .schema-print-student .schema-student-event {
+    font-size: 11pt;
+  }
+
+  .schema-print-student .schema-student-schedule {
+    font-size: 9pt;
+  }
+
+  .schema-print-student .schema-student-schedule th,
+  .schema-print-student .schema-student-schedule td {
+    padding: 2.8mm 2.5mm !important;
+  }
+
+  .schema-print-student .schema-student-schedule tr.stripe td,
+  .schema-print-student .schema-student-schedule tr.stripe th {
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
   }
 
   .schema-print-inspirators .schema-inspirator-lunch-row {
@@ -1164,6 +1429,51 @@ tfoot .stats-total-row td {
   overflow: auto;
   border: 1px solid var(--border);
   border-radius: 8px;
+}
+
+.auto-place-db-mismatch {
+  margin: 0 0 0.75rem;
+  padding: 0.65rem 0.85rem;
+  border-radius: 8px;
+  background: #fff8e6;
+  border: 1px solid #e6c200;
+  font-size: 0.9rem;
+  line-height: 1.45;
+}
+
+.auto-place-capacity {
+  margin: 0 0 1rem;
+  padding: 0.75rem 0.9rem;
+  border-radius: 8px;
+  background: #f0f7f4;
+  border: 1px solid #c5e6d4;
+  font-size: 0.9rem;
+  line-height: 1.45;
+}
+
+.auto-place-capacity-warn {
+  background: #fff8e6;
+  border-color: #e6c200;
+}
+
+.auto-place-capacity-summary {
+  margin: 0 0 0.5rem;
+  font-weight: 600;
+}
+
+.auto-place-capacity-details {
+  margin: 0 0 0.5rem;
+  padding-left: 1.2rem;
+}
+
+.auto-place-capacity-details li {
+  margin-bottom: 0.25rem;
+}
+
+.auto-place-capacity-tip {
+  margin: 0.35rem 0 0;
+  font-size: 0.85rem;
+  color: var(--muted);
 }
 
 .demand-heatmap {
@@ -1454,6 +1764,17 @@ tfoot .stats-total-row td {
   .placement-board {
     grid-template-columns: 1fr;
   }
+}
+
+.placement-preview-mismatch {
+  grid-column: 1 / -1;
+  margin: 0 0 0.75rem;
+  padding: 0.65rem 0.85rem;
+  border-radius: 8px;
+  background: #fff8e6;
+  border: 1px solid #e6c200;
+  font-size: 0.9rem;
+  line-height: 1.45;
 }
 
 .pool-hint {
@@ -1787,6 +2108,15 @@ tfoot .stats-total-row td {
 .student-pass-table td.pass-cell-unplaced .pass-select {
   background: #fff1f2;
   border-color: #dc2626;
+}
+
+.student-pass-table td.pass-cell-duplicate-inspiration {
+  background: #fef08a;
+}
+
+.student-pass-table td.pass-cell-duplicate-inspiration .pass-select {
+  background: #fef9c3;
+  border-color: #ca8a04;
 }
 
 .inspirator-group.dragging-overlay {

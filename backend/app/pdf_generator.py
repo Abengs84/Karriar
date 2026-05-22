@@ -60,7 +60,9 @@ class ScheduleRow:
     text: Optional[str] = None
 
 
-def _wrap_text(c: canvas.Canvas, text: str, max_w: float) -> list[str]:
+def _wrap_text(
+    c: canvas.Canvas, text: str, max_w: float, *, text_size: float = TEXT_SIZE
+) -> list[str]:
     words = text.split()
     if not words:
         return [""]
@@ -68,7 +70,7 @@ def _wrap_text(c: canvas.Canvas, text: str, max_w: float) -> list[str]:
     current = ""
     for word in words:
         test = f"{current} {word}".strip()
-        if c.stringWidth(test, TEXT_FONT, TEXT_SIZE) <= max_w:
+        if c.stringWidth(test, TEXT_FONT, text_size) <= max_w:
             current = test
         else:
             if current:
@@ -90,18 +92,23 @@ def _inspiration_label(student: Student, inspiration: str) -> str:
 
 
 def _content_lines(
-    c: canvas.Canvas, row: ScheduleRow, max_w: float, student: Student | None = None
+    c: canvas.Canvas,
+    row: ScheduleRow,
+    max_w: float,
+    student: Student | None = None,
+    *,
+    text_size: float = TEXT_SIZE,
 ) -> list[str]:
     if row.slot:
         room = row.slot.room.name if row.slot.room else "?"
         inspiration = row.slot.inspiration or "—"
         if student:
             inspiration = _inspiration_label(student, inspiration)
-        return _wrap_text(c, inspiration, max_w) + [room]
+        return _wrap_text(c, inspiration, max_w, text_size=text_size) + [room]
     text = row.text or "—"
-    if c.stringWidth(text, TEXT_FONT, TEXT_SIZE) <= max_w:
+    if c.stringWidth(text, TEXT_FONT, text_size) <= max_w:
         return [text]
-    return _wrap_text(c, text, max_w)
+    return _wrap_text(c, text, max_w, text_size=text_size)
 
 
 def _build_schedule_rows(student: Student) -> list[ScheduleRow]:
@@ -136,46 +143,78 @@ def _table_height(
     rows: list[ScheduleRow],
     max_text_w: float,
     student: Student | None = None,
+    *,
+    text_size: float = TEXT_SIZE,
+    line_leading: float = LINE_LEADING,
+    min_row_h: float = MIN_ROW_H,
 ) -> float:
     total = 0.0
     for row in rows:
-        content = _content_lines(c, row, max_text_w, student)
-        row_h = max(MIN_ROW_H, len(content) * LINE_LEADING + 2.5 * mm)
+        content = _content_lines(c, row, max_text_w, student, text_size=text_size)
+        row_h = max(min_row_h, len(content) * line_leading + 2.5 * mm)
         total += row_h
     return total
 
 
-def _draw_card(c: canvas.Canvas, student: Student, x: float, y: float):
+def _draw_card(
+    c: canvas.Canvas,
+    student: Student,
+    x: float,
+    y: float,
+    card_w: float = CARD_W,
+    card_h: float = CARD_H,
+):
     """Draw one schedule card; (x,y) is bottom-left of card."""
     c.saveState()
 
-    content_w = CARD_W - 2 * PAD_H
-    top = y + CARD_H - PAD_TOP
-    time_w = 22 * mm
-    text_x = x + PAD_H + time_w
-    max_text_w = content_w - time_w - 2 * mm
-    content_x = x + PAD_H
+    scale = card_w / CARD_W
+    text_size = TEXT_SIZE * scale
+    time_size = TIME_SIZE * scale
+    line_leading = LINE_LEADING * scale
+    min_row_h = MIN_ROW_H * scale
+    pad_h = PAD_H * scale
+    pad_top = PAD_TOP * scale
+    pad_bottom = PAD_BOTTOM * scale
+    time_w = 22 * mm * scale
+    footer_gap = FOOTER_GAP * scale
+    event_above_table = EVENT_ABOVE_TABLE * scale
+    sil_above_event = SIL_ABOVE_EVENT * scale
+    sil_top_offset = SIL_TOP_OFFSET * scale
+
+    content_w = card_w - 2 * pad_h
+    top = y + card_h - pad_top
+    text_x = x + pad_h + time_w
+    max_text_w = content_w - time_w - 2 * mm * scale
+    content_x = x + pad_h
 
     rows = _build_schedule_rows(student)
-    table_h = _table_height(c, rows, max_text_w, student)
+    table_h = _table_height(
+        c,
+        rows,
+        max_text_w,
+        student,
+        text_size=text_size,
+        line_leading=line_leading,
+        min_row_h=min_row_h,
+    )
 
     footer_h = 0.0
     if FOOTER_IMG.is_file():
         footer_h = content_w * (656 / 1943) * FOOTER_SCALE
 
     # Bottom-anchored: footer → table → date (tight) → silhouette fills top
-    table_bottom = y + PAD_BOTTOM + footer_h + FOOTER_GAP
+    table_bottom = y + pad_bottom + footer_h + footer_gap
     table_top = table_bottom + table_h
-    event_baseline = table_top + EVENT_ABOVE_TABLE
+    event_baseline = table_top + event_above_table
 
-    c.setFont(TEXT_FONT, TIME_SIZE - 0.5)
+    c.setFont(TEXT_FONT, time_size - 0.5 * scale)
     header = f"{student.school}, {student.first_name} {student.last_name}"
-    c.drawRightString(x + CARD_W - PAD_H, top, header)
+    c.drawRightString(x + card_w - pad_h, top, header)
 
-    sil_top = top - SIL_TOP_OFFSET
+    sil_top = top - sil_top_offset
     sil_w = content_w
     sil_h_natural = sil_w * SILHOUETTE_ASPECT
-    sil_bottom = event_baseline - SIL_ABOVE_EVENT
+    sil_bottom = event_baseline - sil_above_event
     sil_h = min(sil_h_natural, max(0.0, sil_top - sil_bottom))
     sil_y = sil_top - sil_h
 
@@ -191,7 +230,7 @@ def _draw_card(c: canvas.Canvas, student: Student, x: float, y: float):
             mask="auto",
         )
 
-    c.setFont("Helvetica-Bold", 8)
+    c.setFont("Helvetica-Bold", 8 * scale)
     c.drawString(
         content_x,
         event_baseline,
@@ -201,8 +240,8 @@ def _draw_card(c: canvas.Canvas, student: Student, x: float, y: float):
     y_cursor = table_top
 
     for i, row in enumerate(rows):
-        content = _content_lines(c, row, max_text_w, student)
-        row_h = max(MIN_ROW_H, len(content) * LINE_LEADING + 2.5 * mm)
+        content = _content_lines(c, row, max_text_w, student, text_size=text_size)
+        row_h = max(min_row_h, len(content) * line_leading + 2.5 * mm * scale)
         y_cursor -= row_h
         ry = y_cursor
 
@@ -211,20 +250,22 @@ def _draw_card(c: canvas.Canvas, student: Student, x: float, y: float):
         c.rect(content_x, ry, content_w, row_h, stroke=0, fill=1)
         c.setFillColor(colors.black)
 
-        c.setFont(TEXT_FONT, TIME_SIZE)
-        c.drawString(content_x + 1 * mm, ry + row_h - LINE_LEADING - 0.5 * mm, row.time)
+        c.setFont(TEXT_FONT, time_size)
+        c.drawString(
+            content_x + 1 * mm * scale, ry + row_h - line_leading - 0.5 * mm * scale, row.time
+        )
 
-        c.setFont(TEXT_FONT, TEXT_SIZE)
-        text_y = ry + row_h - LINE_LEADING - 0.5 * mm
+        c.setFont(TEXT_FONT, text_size)
+        text_y = ry + row_h - line_leading - 0.5 * mm * scale
         for line in content:
             c.drawString(text_x, text_y, line)
-            text_y -= LINE_LEADING
+            text_y -= line_leading
 
     if FOOTER_IMG.is_file():
         c.drawImage(
             str(FOOTER_IMG),
             content_x,
-            y + PAD_BOTTOM,
+            y + pad_bottom,
             width=content_w,
             height=footer_h,
             preserveAspectRatio=True,
@@ -254,6 +295,32 @@ def generate_school_pdf(students: list[Student]) -> bytes:
             _draw_card(c, student, positions[i][0], positions[i][1])
         c.showPage()
 
+    c.save()
+    buf.seek(0)
+    return buf.read()
+
+
+def generate_student_pdf(student: Student) -> bytes:
+    buf = BytesIO()
+    c = canvas.Canvas(buf, pagesize=A4)
+    full_w = PAGE_W - 2 * MARGIN_X
+    full_h = PAGE_H - MARGIN_TOP - MARGIN_BOTTOM
+    _draw_card(c, student, MARGIN_X, MARGIN_BOTTOM, full_w, full_h)
+    c.showPage()
+    c.save()
+    buf.seek(0)
+    return buf.read()
+
+
+def generate_school_pdf_one_per_page(students: list[Student]) -> bytes:
+    buf = BytesIO()
+    c = canvas.Canvas(buf, pagesize=A4)
+    full_w = PAGE_W - 2 * MARGIN_X
+    full_h = PAGE_H - MARGIN_TOP - MARGIN_BOTTOM
+    sorted_students = sorted(students, key=lambda s: (s.last_name, s.first_name))
+    for student in sorted_students:
+        _draw_card(c, student, MARGIN_X, MARGIN_BOTTOM, full_w, full_h)
+        c.showPage()
     c.save()
     buf.seek(0)
     return buf.read()

@@ -1,12 +1,14 @@
-import { useMemo, useState } from "react";
-import { Room, SessionSlot } from "./api";
+import { useEffect, useMemo, useState } from "react";
+import { api, Room, SessionSlot, Student } from "./api";
+import { StudentSchedulePreview } from "./StudentSchedulePreview";
 
 type Props = {
   rooms: Room[];
   slots: SessionSlot[];
+  students: Student[];
 };
 
-type View = "overview" | "rooms" | "inspirators";
+type View = "overview" | "rooms" | "inspirators" | "student";
 
 const PASS_COLUMNS = [
   { key: "pass1" as const, label: "Pass 1", time: "11:00–11:30" },
@@ -506,8 +508,57 @@ function RoomsView({
   );
 }
 
-export function SchemaTab({ rooms, slots }: Props) {
+function compareStudents(a: Student, b: Student): number {
+  const ln = a.last_name.localeCompare(b.last_name, "sv");
+  if (ln !== 0) return ln;
+  return a.first_name.localeCompare(b.first_name, "sv");
+}
+
+export function SchemaTab({ rooms, slots, students }: Props) {
   const [view, setView] = useState<View>("overview");
+  const [school, setSchool] = useState("");
+  const [studentId, setStudentId] = useState<number | "">("");
+
+  const schools = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const s of students) {
+      counts.set(s.school, (counts.get(s.school) ?? 0) + 1);
+    }
+    return [...counts.entries()]
+      .map(([entrySchool, count]) => ({ school: entrySchool, count }))
+      .sort((a, b) => a.school.localeCompare(b.school, "sv"));
+  }, [students]);
+
+  const studentsInSchool = useMemo(() => {
+    if (!school) return [];
+    return students.filter((s) => s.school === school).sort(compareStudents);
+  }, [students, school]);
+
+  const selectedStudent = useMemo(
+    () => (studentId === "" ? undefined : students.find((s) => s.id === studentId)),
+    [students, studentId]
+  );
+
+  useEffect(() => {
+    if (schools.length === 0) {
+      setSchool("");
+      setStudentId("");
+      return;
+    }
+    if (!school || !schools.some((s) => s.school === school)) {
+      setSchool(schools[0].school);
+    }
+  }, [schools, school]);
+
+  useEffect(() => {
+    if (studentsInSchool.length === 0) {
+      setStudentId("");
+      return;
+    }
+    if (studentId === "" || !studentsInSchool.some((s) => s.id === studentId)) {
+      setStudentId(studentsInSchool[0].id);
+    }
+  }, [studentsInSchool, studentId]);
 
   const slotMap = useMemo(() => {
     const m = new Map<string, SessionSlot>();
@@ -546,7 +597,7 @@ export function SchemaTab({ rooms, slots }: Props) {
     style.id = "schema-print-page";
     style.textContent =
       view === "overview"
-        ? "@media print { @page { size: A4 landscape; margin: 10mm; } }"
+        ? "@media print { @page { size: A4 landscape; margin: 10mm 10mm 12mm; } }"
         : "@media print { @page { size: A4 portrait; margin: 12mm; } }";
     document.head.appendChild(style);
     const cleanup = () => {
@@ -562,21 +613,29 @@ export function SchemaTab({ rooms, slots }: Props) {
       ? "Översikten skrivs ut i liggande A4-format."
       : view === "rooms"
         ? "Rum-vyn skrivs ut i stående (porträtt) A4-format, ett rum per sida."
-        : "Inspiratör-vyn skrivs ut i stående (porträtt) A4-format, en inspiratör per sida.";
+        : view === "inspirators"
+          ? "Inspiratör-vyn skrivs ut i stående (porträtt) A4-format, en inspiratör per sida."
+          : "Elev-schemat skrivs ut i stående A4-format, en elev per sida (samma layout som PDF).";
 
   const printSubtitle =
     view === "overview"
       ? "Översikt alla rum"
       : view === "rooms"
         ? "Bokningar per rum"
-        : "Schema per inspiratör";
+        : view === "inspirators"
+          ? "Schema per inspiratör"
+          : selectedStudent
+            ? `${selectedStudent.school} – ${selectedStudent.first_name} ${selectedStudent.last_name}`
+            : "Schema per elev";
 
   const printSectionTitle =
     view === "overview"
       ? "Översikt – rum och pass"
       : view === "rooms"
         ? "Bokningar per rum"
-        : "Schema per inspiratör";
+        : view === "inspirators"
+          ? "Schema per inspiratör"
+          : "Schema per elev";
 
   return (
     <div className="schema-tab">
@@ -588,8 +647,14 @@ export function SchemaTab({ rooms, slots }: Props) {
           </button>
         </div>
         <p className="schema-lead">
-          Utskriftsvänlig översikt – endast pass med placerade elever ({bookedCount}{" "}
-          bokningar). {leadHint}
+          {view === "student" ? (
+            <>Personligt schema per elev. {leadHint}</>
+          ) : (
+            <>
+              Utskriftsvänlig översikt – endast pass med placerade elever ({bookedCount}{" "}
+              bokningar). {leadHint}
+            </>
+          )}
         </p>
         <div className="schema-view-toggle" role="tablist" aria-label="Schemavy">
           <button
@@ -619,7 +684,56 @@ export function SchemaTab({ rooms, slots }: Props) {
           >
             Inspiratör
           </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={view === "student"}
+            className={view === "student" ? "active" : ""}
+            onClick={() => setView("student")}
+            disabled={students.length === 0}
+          >
+            Elev
+          </button>
         </div>
+        {view === "student" && students.length > 0 && (
+          <div className="schema-student-toolbar">
+            <label>
+              Skola
+              <select value={school} onChange={(e) => setSchool(e.target.value)}>
+                {schools.map((s) => (
+                  <option key={s.school} value={s.school}>
+                    {s.school} ({s.count})
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              Elev
+              <select
+                value={studentId === "" ? "" : String(studentId)}
+                onChange={(e) => setStudentId(Number(e.target.value))}
+                disabled={studentsInSchool.length === 0}
+              >
+                {studentsInSchool.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.last_name}, {s.first_name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            {school ? (
+              <a href={api.pdfSchoolOnePerPageUrl(school)} download>
+                <button type="button" className="primary">
+                  Ladda ner PDF (alla)
+                </button>
+              </a>
+            ) : (
+              <button type="button" className="primary" disabled>
+                Ladda ner PDF (alla)
+              </button>
+            )}
+          </div>
+        )}
       </div>
 
       <div className={`schema-print-area card schema-print-${view}`}>
@@ -640,11 +754,18 @@ export function SchemaTab({ rooms, slots }: Props) {
             <h3 className="schema-section-title only-print">{printSectionTitle}</h3>
             <RoomsView rooms={rooms} slotsByRoom={slotsByRoom} />
           </>
-        ) : (
+        ) : view === "inspirators" ? (
           <>
             <h3 className="schema-section-title only-print">{printSectionTitle}</h3>
             <InspiratorsView slotsByInspirator={slotsByInspirator} />
           </>
+        ) : selectedStudent ? (
+          <>
+            <h3 className="schema-section-title only-print">{printSectionTitle}</h3>
+            <StudentSchedulePreview student={selectedStudent} />
+          </>
+        ) : (
+          <p className="schema-empty">Inga elever importerade ännu.</p>
         )}
       </div>
     </div>

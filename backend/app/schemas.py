@@ -108,6 +108,36 @@ class LunchTrackUpdate(BaseModel):
     lunch_track: str | None  # "2a" | "2b" | null
 
 
+class LunchRebalanceRequest(BaseModel):
+    dry_run: bool = True
+
+
+class LunchRebalanceMoveOut(BaseModel):
+    kind: str
+    session_slot_id: int
+    session_slot_id_b: int | None = None
+    inspiration: str
+    inspiration_b: str | None = None
+    room_name: str
+    from_track: str
+    to_track: str
+    student_count: int
+    student_count_b: int = 0
+    net_delta: int
+
+
+class LunchRebalanceOut(BaseModel):
+    dry_run: bool
+    lunch_2a_before: int
+    lunch_2b_before: int
+    lunch_2a_after: int
+    lunch_2b_after: int
+    moves: list[LunchRebalanceMoveOut]
+    summary: str
+    applied: bool = False
+    blocked_reason: str | None = None
+
+
 class SetStudentPassRequest(BaseModel):
     student_id: int
     pass_type: str  # pass1 | pass2 | pass3 (pass2 = pass2a eller pass2b)
@@ -137,6 +167,7 @@ class AutoSolveRequest(BaseModel):
     balance_lunch_tracks: bool = False
     consolidate_small_groups: bool = True
     same_room_per_inspirator: bool = False
+    hybrid_room_when_short: bool = False
     prioritize_high_demand: bool = True
 
 
@@ -173,3 +204,5 @@ class AutoSolveOut(BaseModel):
     reserve_placed_count: int = 0
     preview_slots: list[SessionSlotOut] | None = None
     preview_inspirator_status: list[PreviewInspiratorStatusOut] | None = None
+    # Vid dry_run: oplacerade i nuvarande databas (Placering-fliken före Verkställ).
+    db_unplaced_student_count: int | None = None

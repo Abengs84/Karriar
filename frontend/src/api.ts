@@ -53,6 +53,8 @@ export type AutoSolveResult = {
   reserve_placed_count: number;
   preview_slots: SessionSlot[] | null;
   preview_inspirator_status: PreviewInspiratorStatus[] | null;
+  /** Vid förhandsgranskning: oplacerade i databasen (det Placering visar innan Verkställ). */
+  db_unplaced_student_count: number | null;
 };
 
 export type PreviewInspiratorStatus = {
@@ -245,6 +247,7 @@ export const api = {
       balance_lunch_tracks?: boolean;
       consolidate_small_groups?: boolean;
       same_room_per_inspirator?: boolean;
+      hybrid_room_when_short?: boolean;
       prioritize_high_demand?: boolean;
     }) =>
       json<AutoSolveResult>(`${API}/placements/auto-solve`, {
@@ -254,6 +257,9 @@ export const api = {
       }),
   },
   pdfUrl: (school: string) => `${API}/pdf/school/${encodeURIComponent(school)}`,
+  pdfSchoolOnePerPageUrl: (school: string) =>
+    `${API}/pdf/school/${encodeURIComponent(school)}/one-per-page`,
+  pdfStudentUrl: (studentId: number) => `${API}/pdf/student/${studentId}`,
   gdprExportUrl: `${API}/gdpr/export`,
   lunchTrack: (studentId: number, lunch_track: string | null) =>
     fetch(`${API}/students/${studentId}/lunch-track`, {
@@ -268,4 +274,38 @@ export const api = {
       }
       if (!r.ok) throw new Error("Kunde inte uppdatera lunchspår");
     }),
+  lunch: {
+    rebalance: (dry_run: boolean) =>
+      json<LunchRebalanceResult>(`${API}/lunch/rebalance`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ dry_run }),
+      }),
+  },
+};
+
+export type LunchRebalanceMove = {
+  kind: "flip" | "swap";
+  session_slot_id: number;
+  session_slot_id_b: number | null;
+  inspiration: string;
+  inspiration_b: string | null;
+  room_name: string;
+  from_track: string;
+  to_track: string;
+  student_count: number;
+  student_count_b: number;
+  net_delta: number;
+};
+
+export type LunchRebalanceResult = {
+  dry_run: boolean;
+  lunch_2a_before: number;
+  lunch_2b_before: number;
+  lunch_2a_after: number;
+  lunch_2b_after: number;
+  moves: LunchRebalanceMove[];
+  summary: string;
+  applied: boolean;
+  blocked_reason: string | null;
 };

@@ -13,7 +13,7 @@ import {
   useSensor,
   useSensors,
 } from "@dnd-kit/core";
-import { api, Room, SessionSlot, Student } from "./api";
+import { api, AutoSolveResult, Room, SessionSlot, Student } from "./api";
 import { createDropToCellAnimation } from "./dropAnimation";
 import { dndDebug, dndDebugGroup, dndDebugWarn, logDndDebugHelpOnce } from "./placementDndDebug";
 import {
@@ -122,6 +122,7 @@ type Props = {
   students: Student[];
   slots: SessionSlot[];
   minStudentsThreshold: number;
+  autoPlacePreview?: AutoSolveResult | null;
   onRefresh: () => Promise<{ students: Student[]; slots: SessionSlot[] }>;
   showMsg: (type: ToastType, text: string) => void;
 };
@@ -131,6 +132,7 @@ export function PlacementBoard({
   students,
   slots,
   minStudentsThreshold,
+  autoPlacePreview = null,
   onRefresh,
   showMsg,
 }: Props) {
@@ -173,6 +175,17 @@ export function PlacementBoard({
     students,
     minStudentsThreshold
   );
+  const sumInGroupRows = groups.reduce((n, [, g]) => n + g.length, 0);
+  const previewUnplaced =
+    autoPlacePreview?.unplaced_student_count ??
+    autoPlacePreview?.missing_pass_count ??
+    null;
+  const dbPreviewUnplaced = autoPlacePreview?.db_unplaced_student_count ?? null;
+  const showPreviewMismatch =
+    autoPlacePreview?.dry_run === true &&
+    dbPreviewUnplaced != null &&
+    previewUnplaced != null &&
+    dbPreviewUnplaced !== previewUnplaced;
 
   const dropMenuRef = useRef(dropMenu);
   dropMenuRef.current = dropMenu;
@@ -515,6 +528,13 @@ export function PlacementBoard({
       onDragCancel={onDragCancel}
     >
       <div className="placement-board">
+        {showPreviewMismatch && (
+          <p className="placement-preview-mismatch" role="status">
+            Du har <strong>förhandsgranskat</strong> auto-placering utan att verkställa. Här visas{" "}
+            <strong>{dbPreviewUnplaced}</strong> elever (nuvarande databas). Efter Verkställ blir det
+            cirka <strong>{previewUnplaced}</strong>. Gå till Auto-placering → Verkställ placering.
+          </p>
+        )}
         <PoolDropColumn dragging={dragGroup != null}>
           <h3>
             Oplacerade grupper ({groups.length}
@@ -528,6 +548,13 @@ export function PlacementBoard({
             bara ha ett pass per tid. Varje inspiratör kan ligga på högst tre tidspass (pass 1, 2
             och 3) och väljer antingen lunch 2a eller 2b – inte båda. Elever som redan har tre pass
             (t.ex. via reserv eller annat val) visas inte här.
+            {sumInGroupRows > uniqueUnplacedStudents && uniqueUnplacedStudents > 0 && (
+              <>
+                {" "}
+                Summan i listan ({sumInGroupRows}) är högre än antalet elever (
+                {uniqueUnplacedStudents}) eftersom samma elev kan räknas i flera grupper.
+              </>
+            )}
           </p>
           {minStudentsThreshold > 0 && (
             <p className="pool-hint pool-hint-threshold">

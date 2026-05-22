@@ -3,6 +3,7 @@ import { fetchAuthStatus, logout } from "./auth";
 import {
   api,
   AuthError,
+  AutoSolveResult,
   InspiratorStat,
   RetentionStatus,
   Room,
@@ -14,8 +15,10 @@ import { RetentionCountdown } from "./RetentionCountdown";
 import { LoginScreen } from "./LoginScreen";
 import { PrivacyNotice } from "./PrivacyNotice";
 import {
+  countPlacedForInspirator,
   countStudentsWithAllChoicesPlaced,
   countStudentsWithUnplacedChoice,
+  countUnplacedForInspirator,
   formatChoiceRanks,
   isPlacedWithInspirator,
   studentHasFullSchedule,
@@ -58,6 +61,7 @@ export default function App() {
   const [minStudentsThreshold, setMinStudentsThreshold] = useState(readMinStudentsThreshold);
   const [highlightStudentId, setHighlightStudentId] = useState<number | null>(null);
   const [retention, setRetention] = useState<RetentionStatus | null>(null);
+  const [autoPlacePreview, setAutoPlacePreview] = useState<AutoSolveResult | null>(null);
   const showMsg = useToast();
 
   const refreshRetention = useCallback(async () => {
@@ -257,7 +261,11 @@ export default function App() {
             rooms={rooms}
             minStudentsThreshold={minStudentsThreshold}
             onMinStudentsThresholdChange={updateMinStudentsThreshold}
-            onDone={refresh}
+            onPreview={setAutoPlacePreview}
+            onDone={async () => {
+              setAutoPlacePreview(null);
+              await refresh();
+            }}
             showMsg={showMsg}
           />
         )}
@@ -267,13 +275,19 @@ export default function App() {
             students={students}
             slots={slots}
             minStudentsThreshold={minStudentsThreshold}
+            autoPlacePreview={autoPlacePreview}
             onRefresh={refreshPlacement}
             showMsg={showMsg}
           />
         )}
-        {tab === "schema" && <SchemaTab rooms={rooms} slots={slots} />}
+        {tab === "schema" && <SchemaTab rooms={rooms} slots={slots} students={students} />}
         {tab === "lunch" && (
-          <LunchTab students={students} onStudentClick={goToStudent} />
+          <LunchTab
+            students={students}
+            onStudentClick={goToStudent}
+            onRefresh={refreshPlacement}
+            showMsg={showMsg}
+          />
         )}
         {tab === "elever" && (
           <StudentPlacementTab
@@ -464,10 +478,12 @@ function StatsTab({
       <p style={{ fontSize: "0.9rem", color: "var(--muted)", marginTop: 0 }}>
         Antal unika elever som valt inspiratören i val 1–3 (kolumn E, F, G). Reservval
         (H) räknas inte. Antal pass = tidspass 1–3 i Placering (max 3 per inspiratör;
-        pass 2 = antingen 2a eller 2b). Summan visar unika elever (samma som i
-        sidhuvudet), inte summan av raderna – en elev med tre val räknas bara en gång
-        där. Klicka på triangeln för att se eleverna; klicka på ett namn för att gå
-        till Elever-fliken.
+        pass 2 = antingen 2a eller 2b). Placerade/Oplacerade per rad följer samma regler
+        som listan under raden (elever med tre pass via andra val räknas inte som
+        oplacerade). Summan under Oplacerade visar unika elever som saknar minst ett
+        val (samma som Elever-fliken), inte summan av kolumnen – en elev kan stå på
+        flera rader. Klicka på triangeln för att se eleverna; klicka på ett namn för
+        att gå till Elever-fliken.
       </p>
       <table className="stats-table">
         <thead>
@@ -484,6 +500,8 @@ function StatsTab({
           {stats.map((s) => {
             const isOpen = expanded.has(s.inspiration);
             const inspiratorStudents = studentsWhoChoseInspirator(students, s.inspiration);
+            const placedCount = countPlacedForInspirator(students, s.inspiration);
+            const unplacedCount = countUnplacedForInspirator(students, s.inspiration);
             return (
               <Fragment key={s.inspiration}>
                 <tr className={isOpen ? "stats-row-expanded" : undefined}>
@@ -502,14 +520,14 @@ function StatsTab({
                     </button>
                   </td>
                   <td>{s.inspiration}</td>
-                  <td>{s.count}</td>
+                  <td>{inspiratorStudents.length}</td>
                   <td>{s.pass_count}</td>
                   <td>
-                    <span className="badge ok">{s.placed}</span>
+                    <span className="badge ok">{placedCount}</span>
                   </td>
                   <td>
-                    {s.unplaced > 0 ? (
-                      <span className="badge warn">{s.unplaced}</span>
+                    {unplacedCount > 0 ? (
+                      <span className="badge warn">{unplacedCount}</span>
                     ) : (
                       <span className="badge ok">0</span>
                     )}

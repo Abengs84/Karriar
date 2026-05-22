@@ -1,5 +1,6 @@
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { api, type AutoSolveResult, type Room, type SessionSlot, type Student } from "./api";
+import { analyzeRoomCapacity } from "./autoPlaceCapacity";
 import { DemandHeatmap } from "./DemandHeatmap";
 import type { ToastType } from "./Toast";
 
@@ -79,6 +80,7 @@ type Props = {
   minStudentsThreshold: number;
   onMinStudentsThresholdChange: (value: number) => void;
   onDone: () => Promise<void>;
+  onPreview?: (result: AutoSolveResult | null) => void;
   showMsg: (type: ToastType, text: string) => void;
 };
 
@@ -91,6 +93,7 @@ export function AutoPlaceTab({
   minStudentsThreshold,
   onMinStudentsThresholdChange,
   onDone,
+  onPreview,
   showMsg,
 }: Props) {
   const [mode, setMode] = useState<"fill" | "replace">("fill");
@@ -98,9 +101,19 @@ export function AutoPlaceTab({
   const [balanceLunchTracks, setBalanceLunchTracks] = useState(true);
   const [consolidateSmallGroups, setConsolidateSmallGroups] = useState(true);
   const [sameRoomPerInspirator, setSameRoomPerInspirator] = useState(false);
+  const [hybridRoomWhenShort, setHybridRoomWhenShort] = useState(false);
   const [prioritizeHighDemand, setPrioritizeHighDemand] = useState(true);
   const [preview, setPreview] = useState<AutoSolveResult | null>(null);
   const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    onPreview?.(preview);
+  }, [preview, onPreview]);
+
+  const capacityInsight = useMemo(
+    () => analyzeRoomCapacity(students, rooms, minStudentsThreshold),
+    [students, rooms, minStudentsThreshold]
+  );
 
   const run = async (dryRun: boolean) => {
     setBusy(true);
@@ -113,6 +126,7 @@ export function AutoPlaceTab({
         balance_lunch_tracks: balanceLunchTracks,
         consolidate_small_groups: consolidateSmallGroups,
         same_room_per_inspirator: sameRoomPerInspirator,
+        hybrid_room_when_short: hybridRoomWhenShort && sameRoomPerInspirator,
         prioritize_high_demand: prioritizeHighDemand,
       });
       if (dryRun) {
@@ -138,6 +152,9 @@ export function AutoPlaceTab({
             <h2>Automatisk placering</h2>
             <p className="meta auto-place-meta">
               {studentCount} elever · {roomCount} rum
+              {capacityInsight
+                ? ` · ${capacityInsight.inspiratorCount} inspiratörer med val`
+                : ""}
             </p>
           </div>
           <div className="auto-place-actions">
@@ -169,6 +186,34 @@ export function AutoPlaceTab({
             </button>
           </div>
         </div>
+
+        {capacityInsight && (
+          <div
+            className={
+              capacityInsight.severity === "warn"
+                ? "auto-place-capacity auto-place-capacity-warn"
+                : "auto-place-capacity"
+            }
+            role="status"
+          >
+            <p className="auto-place-capacity-summary">{capacityInsight.summary}</p>
+            {capacityInsight.detailLines.length > 0 && (
+              <ul className="auto-place-capacity-details">
+                {capacityInsight.detailLines.map((line) => (
+                  <li key={line}>{line}</li>
+                ))}
+              </ul>
+            )}
+            {capacityInsight.shortageInspiratorRooms > 0 &&
+              sameRoomPerInspirator &&
+              !hybridRoomWhenShort && (
+              <p className="auto-place-capacity-tip">
+                Tips: kryssa i <strong>Hybrid vid rumsbrist</strong> under Ett rum per inspiratör,
+                eller lägg till fler rum.
+              </p>
+            )}
+          </div>
+        )}
 
         <details className="auto-place-details">
           <summary>Hur fungerar det?</summary>
@@ -210,7 +255,11 @@ export function AutoPlaceTab({
           <input
             type="checkbox"
             checked={sameRoomPerInspirator}
-            onChange={(e) => setSameRoomPerInspirator(e.target.checked)}
+            onChange={(e) => {
+              const on = e.target.checked;
+              setSameRoomPerInspirator(on);
+              if (!on) setHybridRoomWhenShort(false);
+            }}
             disabled={busy}
           />
           Ett rum per inspiratör (alla pass i samma rum)
@@ -219,6 +268,20 @@ export function AutoPlaceTab({
           Varje inspiratör får ett eget rum för pass 1, 2 och 3. Rum tilldelas efter antal
           val (störst efterfrågan → största sal). Befintliga sessioner flyttas till rätt rum
           vid körning. Utan kryss kan flera inspiratörer dela rum på olika tider.
+        </p>
+        <label>
+          <input
+            type="checkbox"
+            checked={hybridRoomWhenShort}
+            onChange={(e) => setHybridRoomWhenShort(e.target.checked)}
+            disabled={busy || !sameRoomPerInspirator}
+          />
+          Hybrid vid rumsbrist (minst valda delar rum)
+        </label>
+        <p className="auto-place-option-hint">
+          Om det finns färre rum än inspiratörer med val: de {roomCount > 0 ? "mest valda" : ""}{" "}
+          får eget rum (upp till {roomCount} rum), övriga kan dela samma rum på olika tider.
+          Kräver kryssrutan ovan.
         </p>
         <label>
           <input
@@ -304,10 +367,25 @@ export function AutoPlaceTab({
         <div className="auto-place-result">
           <h3>{preview.dry_run ? "Förhandsgranskning" : "Resultat"}</h3>
           {preview.dry_run && (
-            <p className="pool-hint" style={{ marginTop: 0 }}>
-              Siffrorna nedan visar hur det blir <strong>efter</strong> Verkställ placering (ingenting
-              är sparat ännu).
-            </p>
+            <>
+              <p className="pool-hint" style={{ marginTop: 0 }}>
+                Siffrorna nedan är <strong>simulering</strong> – inget är sparat förrän du klickar
+                Verkställ placering.
+              </p>
+              {preview.db_unplaced_student_count != null &&
+                preview.db_unplaced_student_count !==
+                  (preview.unplaced_student_count ?? preview.missing_pass_count) && (
+                  <p className="auto-place-db-mismatch">
+                    Fliken <strong>Placering</strong> visar nu{" "}
+                    <strong>{preview.db_unplaced_student_count}</strong> elever i oplacerade grupper
+                    (nuvarande databas). Efter Verkställ blir det cirka{" "}
+                    <strong>
+                      {preview.unplaced_student_count ?? preview.missing_pass_count ?? 0}
+                    </strong>{" "}
+                    – inte {preview.db_unplaced_student_count}.
+                  </p>
+                )}
+            </>
           )}
           <p>{preview.summary}</p>
           {preview.suppressed_inspirators.length > 0 && (
@@ -332,7 +410,7 @@ export function AutoPlaceTab({
               <strong>
                 {preview.unplaced_student_count ?? preview.missing_pass_count ?? 0}
               </strong>{" "}
-              elever i oplacerade grupper (saknar pass enligt schemat)
+              elever i oplacerade grupper (samma räkning som Placering efter Verkställ)
             </li>
             <li>
               Lunch 2a / 2b: <strong>{preview.lunch_2a ?? 0}</strong> /{" "}

@@ -4,6 +4,7 @@ WORKDIR /app/frontend
 COPY frontend/package.json frontend/package-lock.json* ./
 RUN npm install
 COPY frontend/ ./
+COPY img/ ../img/
 RUN npm run build
 
 # Backend + serve frontend

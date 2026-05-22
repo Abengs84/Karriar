@@ -5,6 +5,8 @@ import {
   countUnplacedSchedulePasses,
   placementAtSchedulePass,
   schedulePassKey,
+  schedulePassesWithDuplicateInspiration,
+  studentHasDuplicateScheduleInspiration,
   studentHasFullSchedule,
   studentPlacementChoices,
 } from "./placementUtils";
@@ -40,6 +42,7 @@ export function StudentPlacementTab({
   const [schoolFilter, setSchoolFilter] = useState("");
   const [search, setSearch] = useState("");
   const [onlyUnplacedPasses, setOnlyUnplacedPasses] = useState(false);
+  const [onlyDuplicateInspiration, setOnlyDuplicateInspiration] = useState(false);
   const [autoFilling, setAutoFilling] = useState(false);
   const [savingId, setSavingId] = useState<number | null>(null);
   const [focusedId, setFocusedId] = useState<number | null>(null);
@@ -94,6 +97,7 @@ export function StudentPlacementTab({
     const q = search.trim().toLowerCase();
     return students.filter((s) => {
       if (onlyUnplacedPasses && studentHasFullSchedule(s)) return false;
+      if (onlyDuplicateInspiration && !studentHasDuplicateScheduleInspiration(s)) return false;
       if (schoolFilter && s.school !== schoolFilter) return false;
       if (q) {
         const name = `${s.first_name} ${s.last_name}`.toLowerCase();
@@ -101,7 +105,7 @@ export function StudentPlacementTab({
       }
       return true;
     });
-  }, [students, schoolFilter, search, onlyUnplacedPasses]);
+  }, [students, schoolFilter, search, onlyUnplacedPasses, onlyDuplicateInspiration]);
 
   const autoFillUnplaced = async () => {
     const unplacedCells = countUnplacedSchedulePasses(students);
@@ -222,6 +226,17 @@ export function StudentPlacementTab({
           />
           Visa bara elever med oplacerat pass
         </label>
+        <label
+          className="student-pass-filter-check"
+          title="Döljer elever utan samma inspiratör på mer än ett tidspass"
+        >
+          <input
+            type="checkbox"
+            checked={onlyDuplicateInspiration}
+            onChange={(e) => setOnlyDuplicateInspiration(e.target.checked)}
+          />
+          Visa bara elever med samma inspiratör på flera pass
+        </label>
       </div>
 
       <div className="student-pass-actions">
@@ -262,7 +277,9 @@ export function StudentPlacementTab({
             </tr>
           </thead>
           <tbody>
-            {filtered.map((s) => (
+            {filtered.map((s) => {
+              const duplicatePasses = schedulePassesWithDuplicateInspiration(s);
+              return (
               <tr
                 key={s.id}
                 id={`student-row-${s.id}`}
@@ -306,8 +323,22 @@ export function StudentPlacementTab({
                     }
                   }
                   const unplaced = !current;
+                  const duplicateInspiration = duplicatePasses.has(p.key);
                   return (
-                    <td key={p.key} className={unplaced ? "pass-cell-unplaced" : undefined}>
+                    <td
+                      key={p.key}
+                      className={[
+                        unplaced ? "pass-cell-unplaced" : "",
+                        duplicateInspiration ? "pass-cell-duplicate-inspiration" : "",
+                      ]
+                        .filter(Boolean)
+                        .join(" ") || undefined}
+                      title={
+                        duplicateInspiration
+                          ? "Samma inspiratör på flera pass"
+                          : undefined
+                      }
+                    >
                       <select
                         className="pass-select"
                         disabled={savingId === s.id || autoFilling}
@@ -328,7 +359,8 @@ export function StudentPlacementTab({
                   );
                 })}
               </tr>
-            ))}
+            );
+            })}
           </tbody>
         </table>
       </div>

@@ -40,9 +40,10 @@ Använd alltid förhandsgranskning först.
 6. **Max tre tidspass per inspiratör** – Pass 1, pass 2 och pass 3. Pass 2 = antingen 2a eller 2b (lunchspår låses vid första session).
 7. **Ett rum per pass och inspiratör** – Samma inspiratör kan inte ligga i två rum samtidigt (samma passtyp). Om rummet är fullt: använd ett **annat tidspass**, inte ett annat rum samma tid.
 8. **Samma rum på flera pass** – Auto-placering försöker lägga samma inspiratör i **samma rum** på pass 1, 2 och 3 när den tiden är ledig i rummet (mjuk prioritering om inget rumslås finns).
-9. **Ett rum per inspiratör (kryssruta)** – Varje inspiratör har **ett** rum för alla pass; rum väljs efter **antal val** (flest val → största lediga sal). Befintliga sessioner flyttas till tilldelat rum. Med *Försök reserv* räknas även reservval in i efterfrågan. Med färre rum än inspiratörer får bara de **mest valda** ett eget rum.
-10. **Prioritera stora grupper (kryssruta, standard på)** – Rumslås och placering sorteras efter **efterfrågan** (antal val 1–3 per inspiratör). Inspiratörer med låg efterfrågan kan flyttas bort från stora sal innan omplacering. Kombinera med **tröskel** för att dölja små inspiratörer helt.
-11. **Ett inspiratörnamn per ruta** – I ett givet rum och passtyp kan bara **en** inspiratör ligga.
+9. **Ett rum per inspiratör (kryssruta)** – Varje inspiratör har **ett** rum för alla pass; rum väljs efter **antal val** (flest val → största lediga sal). Befintliga sessioner flyttas till tilldelat rum. Med *Försök reserv* räknas även reservval in i efterfrågan. Med färre rum än inspiratörer får bara de **mest valda** ett eget rum (strikt läge).
+10. **Hybrid vid rumsbrist** (kräver kryss 9) – Om fler inspiratörer med val än rum: de **mest valda** (högst antal val 1–3) får eget rum som vanligt; **övriga** (minst valda) får **dela** rum med varandra på olika tider (samma pass = fortfarande ett rum per inspiratör).
+11. **Prioritera stora grupper (kryssruta, standard på)** – Rumslås och placering sorteras efter **efterfrågan** (antal val 1–3 per inspiratör). Inspiratörer med låg efterfrågan kan flyttas bort från stora sal innan omplacering. Kombinera med **tröskel** för att dölja små inspiratörer helt.
+12. **Ett inspiratörnamn per ruta** – I ett givet rum och passtyp kan bara **en** inspiratör ligga.
 
 ## Hur algoritmen tänker
 

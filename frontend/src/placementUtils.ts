@@ -254,6 +254,34 @@ export function placementAtSchedulePass(
   return student.placements.find((p) => p.pass_type && schedulePassKey(p.pass_type) === key);
 }
 
+const SCHEDULE_PASS_KEYS = ["pass1", "pass2", "pass3"] as const;
+
+/** Pass 1–3 där samma inspiratör förekommer mer än en gång (t.ex. POLIS + POLIS). */
+export function schedulePassesWithDuplicateInspiration(
+  student: Student
+): Set<(typeof SCHEDULE_PASS_KEYS)[number]> {
+  const inspirationByPass = new Map<string, (typeof SCHEDULE_PASS_KEYS)[number][]>();
+  for (const passType of SCHEDULE_PASS_KEYS) {
+    const placement = placementAtSchedulePass(student, passType);
+    const inspiration = placement?.inspiration;
+    if (!inspiration) continue;
+    const list = inspirationByPass.get(inspiration) ?? [];
+    list.push(passType);
+    inspirationByPass.set(inspiration, list);
+  }
+  const highlighted = new Set<(typeof SCHEDULE_PASS_KEYS)[number]>();
+  for (const passes of inspirationByPass.values()) {
+    if (passes.length > 1) {
+      for (const passType of passes) highlighted.add(passType);
+    }
+  }
+  return highlighted;
+}
+
+export function studentHasDuplicateScheduleInspiration(student: Student): boolean {
+  return schedulePassesWithDuplicateInspiration(student).size > 0;
+}
+
 export function hasPlacementAtSchedulePass(student: Student, passType: string): boolean {
   const key = schedulePassKey(passType);
   return student.placements.some((p) => p.pass_type && schedulePassKey(p.pass_type) === key);
@@ -297,6 +325,20 @@ export function countStudentsWithAllChoicesPlaced(students: Student[]): number {
 export function countStudentsWithUnplacedChoice(students: Student[]): number {
   return students.filter((s) =>
     studentRequiredChoices(s).some((insp) => isUnplacedForInspirator(s, insp))
+  ).length;
+}
+
+/** Elever som valt inspiratören och är placerade hos hen (samma som drill-down). */
+export function countPlacedForInspirator(students: Student[], inspiration: string): number {
+  return studentsWhoChoseInspirator(students, inspiration).filter((s) =>
+    isPlacedWithInspirator(s, inspiration)
+  ).length;
+}
+
+/** Elever oplacerade hos inspiratören med ledigt tidspass (samma som drill-down). */
+export function countUnplacedForInspirator(students: Student[], inspiration: string): number {
+  return studentsWhoChoseInspirator(students, inspiration).filter((s) =>
+    isUnplacedForInspirator(s, inspiration)
   ).length;
 }
 
