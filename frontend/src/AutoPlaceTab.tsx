@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { api, type AutoSolveResult, type Room, type SessionSlot, type Student } from "./api";
 import { analyzeRoomCapacity } from "./autoPlaceCapacity";
+import { AutoPlaceEngineExplanation } from "./autoPlaceEngineExplanation";
 import { DemandHeatmap } from "./DemandHeatmap";
 import type { ToastType } from "./Toast";
 
@@ -97,14 +98,28 @@ export function AutoPlaceTab({
   showMsg,
 }: Props) {
   const [mode, setMode] = useState<"fill" | "replace">("fill");
+  const [solver, setSolver] = useState<"heuristic" | "cp_sat">("heuristic");
+  const [minSessionSize, setMinSessionSize] = useState(5);
   const [tryReserveForUnplaced, setTryReserveForUnplaced] = useState(false);
   const [balanceLunchTracks, setBalanceLunchTracks] = useState(true);
   const [consolidateSmallGroups, setConsolidateSmallGroups] = useState(true);
   const [sameRoomPerInspirator, setSameRoomPerInspirator] = useState(false);
   const [hybridRoomWhenShort, setHybridRoomWhenShort] = useState(false);
   const [prioritizeHighDemand, setPrioritizeHighDemand] = useState(true);
+  const [placeUnplacedPass2Share, setPlaceUnplacedPass2Share] = useState(true);
   const [preview, setPreview] = useState<AutoSolveResult | null>(null);
   const [busy, setBusy] = useState(false);
+  const [busyPhase, setBusyPhase] = useState<"preview" | "apply" | null>(null);
+
+  useEffect(() => {
+    if (!busy) return;
+    const onBeforeUnload = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = "";
+    };
+    window.addEventListener("beforeunload", onBeforeUnload);
+    return () => window.removeEventListener("beforeunload", onBeforeUnload);
+  }, [busy]);
 
   useEffect(() => {
     onPreview?.(preview);
@@ -115,19 +130,26 @@ export function AutoPlaceTab({
     [students, rooms, minStudentsThreshold]
   );
 
+  const useReserve =
+    solver === "cp_sat" ? true : tryReserveForUnplaced;
+
   const run = async (dryRun: boolean) => {
     setBusy(true);
+    setBusyPhase(dryRun ? "preview" : "apply");
     try {
       const result = await api.placements.autoSolve({
-        mode,
+        mode: solver === "cp_sat" ? "replace" : mode,
+        solver,
+        min_session_size: minSessionSize,
         dry_run: dryRun,
         min_students_threshold: minStudentsThreshold,
-        try_reserve_for_unplaced: tryReserveForUnplaced,
+        try_reserve_for_unplaced: useReserve,
         balance_lunch_tracks: balanceLunchTracks,
         consolidate_small_groups: consolidateSmallGroups,
         same_room_per_inspirator: sameRoomPerInspirator,
         hybrid_room_when_short: hybridRoomWhenShort && sameRoomPerInspirator,
         prioritize_high_demand: prioritizeHighDemand,
+        place_unplaced_pass2_share: placeUnplacedPass2Share,
       });
       if (dryRun) {
         setPreview(result);
@@ -141,11 +163,35 @@ export function AutoPlaceTab({
       showMsg("error", e instanceof Error ? e.message : "Automatisk placering misslyckades");
     } finally {
       setBusy(false);
+      setBusyPhase(null);
     }
   };
 
+  const busyMessage =
+    busyPhase === "apply"
+      ? solver === "cp_sat"
+        ? "Verkställer global placering…"
+        : "Sparar placering…"
+      : solver === "cp_sat"
+        ? "Global optimering pågår…"
+        : "Beräknar förhandsgranskning…";
+
+  const busyHint =
+    solver === "cp_sat"
+      ? "Det kan ta 1–3 minuter. Lämna inte sidan – placeringen sparas först när du ser bekräftelsen."
+      : busyPhase === "apply"
+        ? "Lämna inte sidan förrän bekräftelsen visas."
+        : null;
+
   return (
     <div className="auto-place-page">
+      {busy && (
+        <div className="auto-place-busy-overlay" role="status" aria-live="polite" aria-busy="true">
+          <div className="auto-place-spinner" aria-hidden="true" />
+          <p className="auto-place-busy-title">{busyMessage}</p>
+          {busyHint && <p className="auto-place-busy-hint">{busyHint}</p>}
+        </div>
+      )}
       <section className="card auto-place-settings">
         <div className="auto-place-settings-head">
           <div>
@@ -162,10 +208,10 @@ export function AutoPlaceTab({
               type="button"
               className="primary"
               disabled={busy || roomCount === 0}
-              onClick={() => void run(true)}
-            >
-              Förhandsgranska
-            </button>
+            onClick={() => void run(true)}
+          >
+            {busy && busyPhase === "preview" ? "Beräknar…" : "Förhandsgranska"}
+          </button>
             <button
               type="button"
               className="primary"
@@ -182,7 +228,7 @@ export function AutoPlaceTab({
                 void run(false);
               }}
             >
-              Verkställ placering
+              {busy && busyPhase === "apply" ? "Verkställer…" : "Verkställ placering"}
             </button>
           </div>
         </div>
@@ -226,6 +272,59 @@ export function AutoPlaceTab({
 
         <div className="auto-place-settings-grid">
         <fieldset className="auto-place-mode">
+        <legend>Placeringsmotor</legend>
+        <label>
+          <input
+            type="radio"
+            name="auto-solver"
+            checked={solver === "heuristic"}
+            onChange={() => setSolver("heuristic")}
+            disabled={busy}
+          />
+          Snabb heuristik (rekommenderas först)
+        </label>
+        <label>
+          <input
+            type="radio"
+            name="auto-solver"
+            checked={solver === "cp_sat"}
+            onChange={() => {
+              setSolver("cp_sat");
+              setMode("replace");
+              setSameRoomPerInspirator(true);
+              setHybridRoomWhenShort(true);
+              setBalanceLunchTracks(true);
+              setTryReserveForUnplaced(true);
+            }}
+            disabled={busy}
+          />
+          Global optimering (CP-SAT)
+        </label>
+        <p className="auto-place-option-hint">
+          CP-SAT söker en lösning som uppfyller alla regler samtidigt (minst{" "}
+          {minSessionSize} elever per session, rum, lunch). Reserv används automatiskt om
+          något val 1–3 inte får plats. Tar ofta 1–3 minuter och använder alltid
+          «Omplacera allt».
+        </p>
+        {solver === "cp_sat" && (
+          <label className="auto-place-threshold">
+            Minst elever per session:{" "}
+            <input
+              type="number"
+              min={1}
+              max={100}
+              value={minSessionSize}
+              onChange={(e) =>
+                setMinSessionSize(Math.max(1, Math.min(100, Number(e.target.value) || 5)))
+              }
+              disabled={busy}
+            />
+          </label>
+        )}
+        <AutoPlaceEngineExplanation />
+      </fieldset>
+
+        <fieldset className="auto-place-mode">
         <legend>Läge</legend>
         <label>
           <input
@@ -233,7 +332,7 @@ export function AutoPlaceTab({
             name="auto-mode"
             checked={mode === "fill"}
             onChange={() => setMode("fill")}
-            disabled={busy}
+            disabled={busy || solver === "cp_sat"}
           />
           Fyll tomma platser (behåll befintliga placeringar)
         </label>
@@ -247,6 +346,11 @@ export function AutoPlaceTab({
           />
           Omplacera allt (tar bort alla nuvarande placeringar)
         </label>
+        <p className="auto-place-option-hint">
+          Rekommenderas för auto-placering så att förhandsgranskning och Verkställ ger samma
+          resultat. «Fyll tomma platser» behåller befintliga placeringar och kan skilja sig från
+          förhandsvisningen.
+        </p>
       </fieldset>
 
       <fieldset className="auto-place-options">
@@ -322,6 +426,20 @@ export function AutoPlaceTab({
           Fördelar inspiratörer utan låst pass 2 mellan lunch 2a och 2b så att ungefär
           hälften av eleverna hamnar på varje spår. Inspiratörer som redan ligger på 2a
           eller 2b behålls.
+        </p>
+        <label>
+          <input
+            type="checkbox"
+            checked={placeUnplacedPass2Share}
+            onChange={(e) => setPlaceUnplacedPass2Share(e.target.checked)}
+            disabled={busy}
+          />
+          Placera oplacerade i pass 2 (dela rum 2a/2b)
+        </label>
+        <p className="auto-place-option-hint">
+          Efter huvudplacering: inspiratörer som fortfarande saknar pass försöker få
+          pass 2 i samma rum som någon med motsatt lunchspår (t.ex. 2a upptaget → ny
+          grupp på 2b). Passar små grupper som annars faller bort vid rumsbrist.
         </p>
         <label>
           <input

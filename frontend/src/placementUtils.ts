@@ -342,6 +342,11 @@ export function countUnplacedForInspirator(students: Student[], inspiration: str
   ).length;
 }
 
+/** Elever som har inspiratören som reservval (kolumn H). */
+export function countReserveForInspirator(students: Student[], inspiration: string): number {
+  return students.filter((s) => (s.reserve?.trim() ?? "") === inspiration).length;
+}
+
 /** Vilket lunchspår inspiratören redan använder (pass2a eller pass2b). */
 export function inspiratorPass2VariantLocked(
   slots: SessionSlot[],

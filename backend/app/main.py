@@ -3,7 +3,7 @@ import os
 from datetime import datetime, timezone
 from pathlib import Path
 
-from fastapi import Depends, FastAPI, File, HTTPException, Request, Response, UploadFile
+from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
@@ -47,7 +47,8 @@ from app.auto_placer import (
     SlotRef,
     StudentRef,
     _compute_suppressed,
-    apply_solution_to_db,
+    apply_fill_solution_to_db,
+    apply_replace_solution_to_db,
     run_on_orm,
     solve_auto_placement,
 )
@@ -977,11 +978,6 @@ def _preview_inspirator_status(
 
     rows: list[PreviewInspiratorStatusOut] = []
     for inspiration in sorted(inspirations):
-        required = sum(
-            1
-            for s in students
-            if student_chose_for_placement(s, inspiration, suppressed=suppressed)
-        )
         placed = sum(
             1 for s in students if _ref_placed_with_inspirator(s, inspiration)
         )
@@ -1042,6 +1038,8 @@ def _patch_auto_solve_summary_students(summary: str, student_count: int) -> str:
 def auto_solve(data: AutoSolveRequest, db: Session = Depends(get_db)):
     if data.mode not in ("fill", "replace"):
         raise HTTPException(400, "mode måste vara fill eller replace")
+    if data.solver not in ("heuristic", "cp_sat"):
+        raise HTTPException(400, "solver måste vara heuristic eller cp_sat")
 
     rooms_orm = db.query(Room).order_by(Room.name).all()
     if not rooms_orm:
@@ -1053,6 +1051,8 @@ def auto_solve(data: AutoSolveRequest, db: Session = Depends(get_db)):
     if data.mode == "replace" and not data.dry_run:
         db.query(Placement).delete()
         db.query(SessionSlot).delete()
+        for row in db.query(Student).all():
+            row.lunch_track = None
         db.commit()
 
     students_orm = (
@@ -1073,7 +1073,33 @@ def auto_solve(data: AutoSolveRequest, db: Session = Depends(get_db)):
         .all()
     )
 
-    if data.mode == "replace" and data.dry_run:
+    solve_kwargs = dict(
+        min_students_threshold=data.min_students_threshold,
+        try_reserve_for_unplaced=data.try_reserve_for_unplaced,
+        balance_lunch_tracks=data.balance_lunch_tracks,
+        consolidate_small_groups=data.consolidate_small_groups,
+        room_locks=room_locks,
+        exclusive_one_inspirator_per_room=exclusive_rooms,
+        hybrid_room_when_short=data.hybrid_room_when_short and exclusive_rooms,
+        prioritize_high_demand=data.prioritize_high_demand,
+        place_unplaced_pass2_share=data.place_unplaced_pass2_share,
+    )
+
+    use_cp_sat = data.solver == "cp_sat"
+    cp_sat_config = None
+    if use_cp_sat:
+        from app.placement_cp_sat import CpSatConfig, solve_cp_sat
+
+        cp_sat_config = CpSatConfig(
+            min_session_size=data.min_session_size,
+            balance_lunch_tracks=data.balance_lunch_tracks,
+            same_room_per_inspirator=data.same_room_per_inspirator,
+            hybrid_room_when_short=data.hybrid_room_when_short
+            and data.same_room_per_inspirator,
+            try_reserve_for_unplaced=data.try_reserve_for_unplaced,
+        )
+
+    if data.mode == "replace":
         students = [
             StudentRef(
                 id=s.id,
@@ -1087,41 +1113,46 @@ def auto_solve(data: AutoSolveRequest, db: Session = Depends(get_db)):
             for s in students_orm
         ]
         rooms = [RoomRef(r.id, r.name, r.capacity) for r in rooms_orm]
-        slots = []
-        result = solve_auto_placement(
-            students,
-            rooms,
-            slots,
-            min_students_threshold=data.min_students_threshold,
-            try_reserve_for_unplaced=data.try_reserve_for_unplaced,
-            balance_lunch_tracks=data.balance_lunch_tracks,
-            consolidate_small_groups=data.consolidate_small_groups,
-            room_locks=room_locks,
-            exclusive_one_inspirator_per_room=exclusive_rooms,
-            hybrid_room_when_short=data.hybrid_room_when_short and exclusive_rooms,
-            prioritize_high_demand=data.prioritize_high_demand,
-        )
+        slots: list[SlotRef] = []
+        if use_cp_sat:
+            students, slots, result, _diag = solve_cp_sat(
+                students,
+                rooms,
+                slots,
+                min_students_threshold=data.min_students_threshold,
+                config=cp_sat_config,
+            )
+        else:
+            result = solve_auto_placement(students, rooms, slots, **solve_kwargs)
     else:
+        if use_cp_sat:
+            raise HTTPException(
+                400,
+                "Global optimering (CP-SAT) stöds bara i läget «Omplacera allt».",
+            )
         students, slots, result = run_on_orm(
-            students_orm,
-            rooms_orm,
-            slots_orm,
-            min_students_threshold=data.min_students_threshold,
-            try_reserve_for_unplaced=data.try_reserve_for_unplaced,
-            balance_lunch_tracks=data.balance_lunch_tracks,
-            consolidate_small_groups=data.consolidate_small_groups,
-            room_locks=room_locks,
-            exclusive_one_inspirator_per_room=exclusive_rooms,
-            hybrid_room_when_short=data.hybrid_room_when_short and exclusive_rooms,
-            prioritize_high_demand=data.prioritize_high_demand,
+            students_orm, rooms_orm, slots_orm, **solve_kwargs
         )
 
+    expected_placements = sum(len(s.placements) for s in students)
+
     db_unplaced_students = 0
+    apply_skipped = 0
+    placements_in_db = 0
     if not data.dry_run:
-        apply_solution_to_db(db, students_orm, slots)
+        if data.mode == "replace":
+            _, apply_skipped = apply_replace_solution_to_db(
+                db,
+                students_orm,
+                students,
+                slots,
+            )
+        else:
+            apply_fill_solution_to_db(db, students_orm, slots)
         purge_invalid_placements(db)
         purge_empty_session_slots(db)
         db.commit()
+        placements_in_db = db.query(Placement).count()
         students_orm = (
             db.query(Student)
             .options(
@@ -1168,6 +1199,21 @@ def auto_solve(data: AutoSolveRequest, db: Session = Depends(get_db)):
             students, slots, data.min_students_threshold
         )
 
+    summary = _patch_auto_solve_summary_students(
+        result.summary, board_unplaced_students
+    )
+    if not data.dry_run:
+        if apply_skipped > 0:
+            summary += f" Varning: {apply_skipped} pass kunde inte sparas."
+        if (
+            data.mode == "replace"
+            and placements_in_db < expected_placements - apply_skipped
+        ):
+            summary += (
+                f" Varning: {expected_placements} pass i lösningen men"
+                f" {placements_in_db} sparades i databasen – starta om backend och försök igen."
+            )
+
     return AutoSolveOut(
         placed_new=result.placed_new,
         slots_created=result.slots_created,
@@ -1177,9 +1223,7 @@ def auto_solve(data: AutoSolveRequest, db: Session = Depends(get_db)):
         unplaced_sample=sample,
         score=result.score,
         by_choice_field=result.by_choice_field,
-        summary=_patch_auto_solve_summary_students(
-            result.summary, board_unplaced_students
-        ),
+        summary=summary,
         dry_run=data.dry_run,
         suppressed_inspirators=result.suppressed_inspirators,
         lunch_2a=result.lunch_2a,

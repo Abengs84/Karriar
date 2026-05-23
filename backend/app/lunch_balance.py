@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 
 from sqlalchemy.orm import Session, joinedload
 
-from app.models import Placement, Room, SessionSlot, Student
+from app.models import SessionSlot, Student
 
 PASS2_TYPES = frozenset({"pass2a", "pass2b"})
 TEMP_ROOM_OFFSET = 1_000_000

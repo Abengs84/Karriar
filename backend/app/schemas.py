@@ -161,7 +161,9 @@ class InspiratorRoomLocksSetResult(BaseModel):
 
 class AutoSolveRequest(BaseModel):
     mode: str = "fill"  # fill | replace
+    solver: str = "heuristic"  # heuristic | cp_sat
     dry_run: bool = True
+    min_session_size: int = Field(default=5, ge=1, le=500)
     min_students_threshold: int = Field(default=0, ge=0, le=500)
     try_reserve_for_unplaced: bool = False
     balance_lunch_tracks: bool = False
@@ -169,6 +171,7 @@ class AutoSolveRequest(BaseModel):
     same_room_per_inspirator: bool = False
     hybrid_room_when_short: bool = False
     prioritize_high_demand: bool = True
+    place_unplaced_pass2_share: bool = False
 
 
 class UnplacedNeedOut(BaseModel):

@@ -78,7 +78,11 @@ def main() -> None:
     for label in ("pass1", "pass2 (2a+2b)", "pass3"):
         print(f"  {label}: max {total_cap} platser, behov {n_students} elever")
     if total_cap < n_students:
-        print(f"  ⚠ Summa rum räcker inte per tid – minst {n_students - total_cap} elever kan inte få pass samtidigt.")
+        shortfall = n_students - total_cap
+        print(
+            f"  ⚠ Summa rum räcker inte per tid – minst {shortfall} elever "
+            "kan inte få pass samtidigt."
+        )
 
     # DB placement state
     if "placements" in tables:
@@ -92,7 +96,6 @@ def main() -> None:
         ).fetchall():
             key = "pass2" if pt in ("pass2a", "pass2b") else pt
             pl_by_st[sid].add(key)
-        missing = n_students - sum(1 for s in range(n_students) if len(pl_by_st.get(s, set())) >= 3)
         # recount properly
         all_ids = [r[0] for r in c.execute("SELECT id FROM students").fetchall()]
         missing_n = sum(1 for sid in all_ids if len(pl_by_st.get(sid, set())) < 3)

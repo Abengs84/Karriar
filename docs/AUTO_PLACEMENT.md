@@ -44,6 +44,7 @@ Använd alltid förhandsgranskning först.
 10. **Hybrid vid rumsbrist** (kräver kryss 9) – Om fler inspiratörer med val än rum: de **mest valda** (högst antal val 1–3) får eget rum som vanligt; **övriga** (minst valda) får **dela** rum med varandra på olika tider (samma pass = fortfarande ett rum per inspiratör).
 11. **Prioritera stora grupper (kryssruta, standard på)** – Rumslås och placering sorteras efter **efterfrågan** (antal val 1–3 per inspiratör). Inspiratörer med låg efterfrågan kan flyttas bort från stora sal innan omplacering. Kombinera med **tröskel** för att dölja små inspiratörer helt.
 12. **Ett inspiratörnamn per ruta** – I ett givet rum och passtyp kan bara **en** inspiratör ligga.
+13. **Placera oplacerade i pass 2 (dela rum 2a/2b)** (kryssruta, standard på) – Efter huvudloopen: inspiratörer som fortfarande saknar session försöker få **pass 2** i ett rum där motsatt lunchspår redan är bokat (t.ex. någon har 2a → oplacerad grupp på 2b i samma rum). Gäller även rum som annars är låsta till en annan inspiratör, så länge den andra 2a/2b-rutan är ledig.
 
 ## Hur algoritmen tänker
 
@@ -166,4 +167,22 @@ Svaret innehåller `placed_new`, `slots_created`, `unplaced_count`, `score`, `by
 - Tar inte hänsyn till geografisk närhet mellan rum eller önskemål utöver val 1–3/reserv.
 - Skapar inte sessioner om det inte finns **något** ledigt rum för passtypen.
 
-Framtida förbättringar kan t.ex. vara manuella låsningar (“den här eleven ska ha val 1 på pass 1”) eller omoptimering med extern solver (OR-Tools).
+## Global optimering (CP-SAT)
+
+Under **Placeringsmotor → Global optimering (CP-SAT)** används Google OR-Tools för att söka en lösning som uppfyller:
+
+- alla val 1–3 per elev (efter dedup/reserv),
+- minst **N** elever per session (standard 5),
+- rumskapacitet och högst en inspiratör per (rum, passtyp),
+- ett rum per inspiratör när det räcker; annars delning med lägst straff för minst valda,
+- lunchbalans 2a/2b.
+- **reserv** på ledigt pass (eller via omflyttning) om val 1–3 fortfarande saknar plats efter huvudlösningen.
+
+Kör alltid med **Omplacera allt**. Kan ta 1–3 minuter för ~300 elever. Om ingen lösning hittas är kombinationen troligen omöjlig under reglerna (t.ex. för många till samma inspiratör utan fler pass i större sal).
+
+| Del | Fil |
+|-----|-----|
+| CP-SAT | `backend/app/placement_cp_sat.py` |
+| Genomförbarhet från Excel | `python backend/scripts/feasibility_from_excel.py` |
+
+Framtida förbättringar kan t.ex. vara manuella låsningar (“den här eleven ska ha val 1 på pass 1”).

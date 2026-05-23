@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { createPortal } from "react-dom";
 import {
   DndContext,
   DragEndEvent,
@@ -27,6 +28,7 @@ import {
   inspiratorBookedElsewhereAtPass,
   resolvePlacementPassType,
   splitStudentsForPlacement,
+  countReserveForInspirator,
   countUniqueUnplacedStudents,
   unplacedByInspirator,
 } from "./placementUtils";
@@ -45,6 +47,14 @@ const PASS_COLUMNS = [
 
 const DROP_ANIM_MS = 320;
 const POOL_DROP_ID = "pool-return";
+
+type PlacementViewMode = "group" | "individual";
+
+type DragPayload = {
+  inspiration: string;
+  studentIds: number[];
+  overlayLabel?: string;
+};
 
 function parseCellFromOverId(overId: string): { roomId: number; passType: string } | null {
   const m = overId.match(/^cell-(\d+)-(pass1|pass2|pass3)$/);
@@ -136,9 +146,15 @@ export function PlacementBoard({
   onRefresh,
   showMsg,
 }: Props) {
-  const [dragGroup, setDragGroup] = useState<{ inspiration: string; ids: number[] } | null>(null);
+  const [placementViewMode, setPlacementViewMode] = useState<PlacementViewMode>("group");
+  const [dragGroup, setDragGroup] = useState<{
+    inspiration: string;
+    ids: number[];
+    overlayLabel?: string;
+  } | null>(null);
   /** Håller källkortet dolt tills drop-animation + API är klara (undviker "hopp tillbaka"). */
   const [concealedInspiration, setConcealedInspiration] = useState<string | null>(null);
+  const [concealedStudentId, setConcealedStudentId] = useState<number | null>(null);
   const [cellMenu, setCellMenu] = useState<{ x: number; y: number; slot: SessionSlot } | null>(
     null
   );
@@ -170,12 +186,26 @@ export function PlacementBoard({
     slotMap.set(`${s.room_id}-${s.pass_type}`, s);
   }
 
-  const groups = unplacedByInspirator(students, minStudentsThreshold);
+  const groups = useMemo(() => {
+    const raw = unplacedByInspirator(students, minStudentsThreshold);
+    return [...raw].sort(
+      (a, b) => a[1].length - b[1].length || a[0].localeCompare(b[0], "sv")
+    );
+  }, [students, minStudentsThreshold]);
   const uniqueUnplacedStudents = countUniqueUnplacedStudents(
     students,
     minStudentsThreshold
   );
   const sumInGroupRows = groups.reduce((n, [, g]) => n + g.length, 0);
+  const reserveCountByInspiration = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const s of students) {
+      const r = s.reserve?.trim();
+      if (!r) continue;
+      map.set(r, (map.get(r) ?? 0) + 1);
+    }
+    return map;
+  }, [students]);
   const previewUnplaced =
     autoPlacePreview?.unplaced_student_count ??
     autoPlacePreview?.missing_pass_count ??
@@ -194,6 +224,7 @@ export function PlacementBoard({
     setDropMenu(null);
     setDragGroup(null);
     setConcealedInspiration(null);
+    setConcealedStudentId(null);
     dropTargetRef.current = null;
     lastOverLogRef.current = null;
     dndDebug("släpp avbrutet via meny");
@@ -267,6 +298,7 @@ export function PlacementBoard({
         lastOverLogRef.current = null;
         setDragGroup(null);
         setConcealedInspiration(null);
+        setConcealedStudentId(null);
       }
     },
     [onRefresh, showMsg, slots]
@@ -316,15 +348,25 @@ export function PlacementBoard({
   };
 
   const onDragStart = (e: DragStartEvent) => {
-    const data = e.active.data.current as { inspiration: string; studentIds: number[] };
+    const data = e.active.data.current as DragPayload | undefined;
     lastOverLogRef.current = null;
     dndDebugGroup("dragStart", () => {
       dndDebug("active.id", { activeId: String(e.active.id) });
       dndDebug("grupp", data ?? { error: "saknar data på draggable" });
     });
     if (data) {
-      setDragGroup({ inspiration: data.inspiration, ids: data.studentIds });
-      setConcealedInspiration(data.inspiration);
+      setDragGroup({
+        inspiration: data.inspiration,
+        ids: data.studentIds,
+        overlayLabel: data.overlayLabel,
+      });
+      if (data.studentIds.length === 1) {
+        setConcealedStudentId(data.studentIds[0]);
+        setConcealedInspiration(null);
+      } else {
+        setConcealedInspiration(data.inspiration);
+        setConcealedStudentId(null);
+      }
     }
   };
 
@@ -354,6 +396,7 @@ export function PlacementBoard({
     lastOverLogRef.current = null;
     setDragGroup(null);
     setConcealedInspiration(null);
+    setConcealedStudentId(null);
   };
 
   const onDragEnd = async (e: DragEndEvent) => {
@@ -362,7 +405,7 @@ export function PlacementBoard({
       return;
     }
 
-    const group = e.active.data.current as { inspiration: string; studentIds: number[] } | undefined;
+    const group = e.active.data.current as DragPayload | undefined;
     const overFromEvent = e.over?.id != null ? String(e.over.id) : null;
     const overId = overFromEvent ?? dropTargetRef.current;
     if (e.over?.id != null) {
@@ -390,6 +433,7 @@ export function PlacementBoard({
       lastOverLogRef.current = null;
       setDragGroup(null);
       setConcealedInspiration(null);
+      setConcealedStudentId(null);
       return;
     }
 
@@ -433,6 +477,7 @@ export function PlacementBoard({
       lastOverLogRef.current = null;
       setDragGroup(null);
       setConcealedInspiration(null);
+      setConcealedStudentId(null);
       return;
     }
 
@@ -472,6 +517,7 @@ export function PlacementBoard({
       lastOverLogRef.current = null;
       setDragGroup(null);
       setConcealedInspiration(null);
+      setConcealedStudentId(null);
       return;
     }
 
@@ -489,6 +535,7 @@ export function PlacementBoard({
       lastOverLogRef.current = null;
       setDragGroup(null);
       setConcealedInspiration(null);
+      setConcealedStudentId(null);
       return;
     }
 
@@ -528,6 +575,26 @@ export function PlacementBoard({
       onDragCancel={onDragCancel}
     >
       <div className="placement-board">
+        <div className="placement-view-toolbar" role="tablist" aria-label="Placeringsläge">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={placementViewMode === "group"}
+            className={placementViewMode === "group" ? "active" : ""}
+            onClick={() => setPlacementViewMode("group")}
+          >
+            Gruppdrag
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={placementViewMode === "individual"}
+            className={placementViewMode === "individual" ? "active" : ""}
+            onClick={() => setPlacementViewMode("individual")}
+          >
+            Individuellt
+          </button>
+        </div>
         {showPreviewMismatch && (
           <p className="placement-preview-mismatch" role="status">
             Du har <strong>förhandsgranskat</strong> auto-placering utan att verkställa. Här visas{" "}
@@ -544,10 +611,21 @@ export function PlacementBoard({
             )
           </h3>
           <p className="pool-hint">
-            Dra en grupp till en ruta i schemat. Släpp tillbaka här för att ångra. Varje elev kan
-            bara ha ett pass per tid. Varje inspiratör kan ligga på högst tre tidspass (pass 1, 2
-            och 3) och väljer antingen lunch 2a eller 2b – inte båda. Elever som redan har tre pass
-            (t.ex. via reserv eller annat val) visas inte här.
+            {placementViewMode === "group" ? (
+              <>
+                Dra en hel grupp till en ruta i schemat. Släpp tillbaka här för att ångra.
+              </>
+            ) : (
+              <>
+                Expandera grupperna och dra <strong>en elev i taget</strong> till schemat. Släpp
+                tillbaka här för att ångra.
+              </>
+            )}{" "}
+            Varje elev kan bara ha ett pass per tid. Varje inspiratör kan ligga på högst tre
+            tidspass (pass 1, 2 och 3) och väljer antingen lunch 2a eller 2b – inte båda. Elever
+            som redan har tre pass (t.ex. via reserv eller annat val) visas inte här. Antal
+            reservval är alla elever med inspiratören som reserv (kolumn H), även om de redan är
+            placerade.
             {sumInGroupRows > uniqueUnplacedStudents && uniqueUnplacedStudents > 0 && (
               <>
                 {" "}
@@ -562,13 +640,18 @@ export function PlacementBoard({
               elever listas under reserv om de har reservval.
             </p>
           )}
-          <div className="pool-list">
+          <div
+            className={`pool-list ${placementViewMode === "individual" ? "pool-list--icons" : ""}`}
+          >
             {groups.map(([inspiration, group]) => (
               <DraggableGroup
                 key={inspiration}
                 inspiration={inspiration}
                 students={group}
+                reserveCount={reserveCountByInspiration.get(inspiration) ?? 0}
+                viewMode={placementViewMode}
                 concealed={concealedInspiration === inspiration}
+                concealedStudentId={concealedStudentId}
               />
             ))}
             {groups.length === 0 && (
@@ -701,9 +784,22 @@ export function PlacementBoard({
 
       <DragOverlay dropAnimation={dropAnimation}>
         {dragGroup && (
-          <div className="inspirator-group dragging-overlay">
-            <h4>{dragGroup.inspiration}</h4>
-            <div className="meta">{dragGroup.ids.length} elever</div>
+          <div
+            className={`inspirator-group dragging-overlay ${dragGroup.overlayLabel ? "group-student-icon-wrap dragging-overlay" : ""}`}
+          >
+            {dragGroup.overlayLabel ? (
+              <StudentDragIcon label={dragGroup.overlayLabel} inspiration={dragGroup.inspiration} />
+            ) : (
+              <>
+                <h4>{dragGroup.inspiration}</h4>
+                <div className="meta">
+                  <GroupStudentMeta
+                    count={dragGroup.ids.length}
+                    reserveCount={countReserveForInspirator(students, dragGroup.inspiration)}
+                  />
+                </div>
+              </>
+            )}
           </div>
         )}
       </DragOverlay>
@@ -731,34 +827,238 @@ function PoolDropColumn({
   );
 }
 
+function GroupStudentMeta({
+  count,
+  reserveCount,
+}: {
+  count: number;
+  reserveCount: number;
+}) {
+  const elevLabel = count === 1 ? "1 elev" : `${count} elever`;
+  if (reserveCount <= 0) return <>{elevLabel}</>;
+  const reservLabel =
+    reserveCount === 1 ? "1 reservval" : `${reserveCount} reservval`;
+  return (
+    <>
+      {elevLabel} · {reservLabel}
+    </>
+  );
+}
+
 function DraggableGroup({
   inspiration,
   students,
+  reserveCount,
+  viewMode,
   concealed,
+  concealedStudentId,
 }: {
   inspiration: string;
   students: Student[];
+  reserveCount: number;
+  viewMode: PlacementViewMode;
   concealed: boolean;
+  concealedStudentId: number | null;
 }) {
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
     id: `group-${inspiration}`,
     data: { inspiration, studentIds: students.map((s) => s.id) },
+    disabled: viewMode === "individual",
   });
 
-  const hidden = isDragging || concealed;
+  const hidden = viewMode === "group" && (isDragging || concealed);
 
   return (
     <div
-      ref={setNodeRef}
-      className={`inspirator-group ${hidden ? "dragging" : ""}`}
-      {...listeners}
-      {...attributes}
+      ref={viewMode === "group" ? setNodeRef : undefined}
+      className={[
+        "inspirator-group",
+        viewMode === "individual" ? "inspirator-group--pool" : "",
+        hidden ? "dragging" : "",
+      ]
+        .filter(Boolean)
+        .join(" ")}
+      {...(viewMode === "group" ? { ...listeners, ...attributes } : {})}
     >
       <h4>{inspiration}</h4>
       <div className="meta">
-        {students.length === 1 ? "1 elev" : `${students.length} elever`}
+        <GroupStudentMeta count={students.length} reserveCount={reserveCount} />
+        {viewMode === "individual" ? " · dra ikon nedan" : ""}
       </div>
+      {viewMode === "individual" && (
+        <ul className="group-student-list">
+          {students.map((s) => (
+            <DraggableStudent
+              key={s.id}
+              student={s}
+              inspiration={inspiration}
+              concealed={concealedStudentId === s.id}
+            />
+          ))}
+        </ul>
+      )}
     </div>
+  );
+}
+
+function StudentPersonIcon() {
+  return (
+    <svg
+      className="group-student-icon-svg"
+      viewBox="0 0 24 24"
+      width={16}
+      height={16}
+      aria-hidden
+    >
+      <circle cx="12" cy="8" r="3.5" fill="currentColor" />
+      <path
+        fill="currentColor"
+        d="M5 20c0-3.5 3.1-6 7-6s7 2.5 7 6v1H5v-1z"
+      />
+    </svg>
+  );
+}
+
+function StudentDragIcon({
+  label,
+  inspiration,
+}: {
+  label: string;
+  inspiration: string;
+}) {
+  return (
+    <div className="group-student-icon-wrap group-student-icon-wrap--overlay">
+      <span className="group-student-icon" aria-hidden>
+        <StudentPersonIcon />
+      </span>
+      <span className="group-student-overlay-meta">
+        <strong>{label}</strong>
+        <span>{inspiration}</span>
+      </span>
+    </div>
+  );
+}
+
+type StudentTooltipAlign = "center" | "start" | "end";
+
+type StudentTooltipPos = {
+  x: number;
+  y: number;
+  align: StudentTooltipAlign;
+};
+
+const TOOLTIP_EST_WIDTH = 288;
+const TOOLTIP_VIEWPORT_MARGIN = 10;
+
+function StudentTooltipContent({ student, label }: { student: Student; label: string }) {
+  return (
+    <>
+      <span className="group-student-tooltip-name">{label}</span>
+      <span>Val 1: {student.choice1?.trim() || "—"}</span>
+      <span>Val 2: {student.choice2?.trim() || "—"}</span>
+      <span>Val 3: {student.choice3?.trim() || "—"}</span>
+      <span>Reserv: {student.reserve?.trim() || "—"}</span>
+    </>
+  );
+}
+
+function DraggableStudent({
+  student,
+  inspiration,
+  concealed,
+}: {
+  student: Student;
+  inspiration: string;
+  concealed: boolean;
+}) {
+  const label = `${student.first_name} ${student.last_name}`;
+  const choiceLine = (rank: string, value: string | null) =>
+    `${rank}: ${value?.trim() || "—"}`;
+  const wrapRef = useRef<HTMLDivElement | null>(null);
+  const [tooltip, setTooltip] = useState<StudentTooltipPos | null>(null);
+  const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
+    id: `student-${student.id}-${inspiration}`,
+    data: {
+      inspiration,
+      studentIds: [student.id],
+      overlayLabel: label,
+    },
+  });
+
+  const mergeRef = useCallback(
+    (node: HTMLDivElement | null) => {
+      setNodeRef(node);
+      wrapRef.current = node;
+    },
+    [setNodeRef]
+  );
+
+  const showTooltip = useCallback(() => {
+    const el = wrapRef.current;
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    const centerX = r.left + r.width / 2;
+    let align: StudentTooltipAlign = "center";
+    let x = centerX;
+    if (centerX - TOOLTIP_EST_WIDTH / 2 < TOOLTIP_VIEWPORT_MARGIN) {
+      align = "start";
+      x = r.left;
+    } else if (centerX + TOOLTIP_EST_WIDTH / 2 > window.innerWidth - TOOLTIP_VIEWPORT_MARGIN) {
+      align = "end";
+      x = r.right;
+    }
+    setTooltip({ x, y: r.top - 6, align });
+  }, []);
+
+  const hideTooltip = useCallback(() => setTooltip(null), []);
+
+  const hidden = isDragging || concealed;
+
+  const tooltipStyle: CSSProperties =
+    tooltip?.align === "center"
+      ? { left: tooltip.x, top: tooltip.y, transform: "translate(-50%, -100%)" }
+      : tooltip?.align === "start"
+        ? { left: tooltip.x, top: tooltip.y, transform: "translateY(-100%)" }
+        : tooltip
+          ? { right: window.innerWidth - tooltip.x, top: tooltip.y, transform: "translateY(-100%)" }
+          : {};
+
+  return (
+    <li>
+      <div
+        ref={mergeRef}
+        className={`group-student-icon-wrap ${hidden ? "dragging" : ""}`}
+        {...listeners}
+        {...attributes}
+        onMouseEnter={showTooltip}
+        onMouseLeave={hideTooltip}
+        onFocus={showTooltip}
+        onBlur={hideTooltip}
+        aria-label={[
+          label,
+          choiceLine("Val 1", student.choice1),
+          choiceLine("Val 2", student.choice2),
+          choiceLine("Val 3", student.choice3),
+          choiceLine("Reserv", student.reserve),
+        ].join(", ")}
+      >
+        <span className="group-student-icon">
+          <StudentPersonIcon />
+        </span>
+      </div>
+      {tooltip &&
+        !hidden &&
+        createPortal(
+          <div
+            className={`group-student-tooltip group-student-tooltip--fixed group-student-tooltip--${tooltip.align}`}
+            style={tooltipStyle}
+            role="tooltip"
+          >
+            <StudentTooltipContent student={student} label={label} />
+          </div>,
+          document.body
+        )}
+    </li>
   );
 }
 

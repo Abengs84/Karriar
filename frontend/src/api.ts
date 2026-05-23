@@ -241,6 +241,8 @@ export const api = {
       }),
     autoSolve: (body: {
       mode: "fill" | "replace";
+      solver?: "heuristic" | "cp_sat";
+      min_session_size?: number;
       dry_run: boolean;
       min_students_threshold?: number;
       try_reserve_for_unplaced?: boolean;
@@ -249,6 +251,7 @@ export const api = {
       same_room_per_inspirator?: boolean;
       hybrid_room_when_short?: boolean;
       prioritize_high_demand?: boolean;
+      place_unplaced_pass2_share?: boolean;
     }) =>
       json<AutoSolveResult>(`${API}/placements/auto-solve`, {
         method: "POST",
