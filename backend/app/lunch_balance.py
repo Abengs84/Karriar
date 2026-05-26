@@ -381,6 +381,7 @@ def _apply_swap(db: Session, slot_a_id: int, slot_b_id: int) -> None:
     slot_a.room_id = temp_room
     db.flush()
     slot_b.pass_type = "pass2a"
+    db.flush()
     slot_a.pass_type = "pass2b"
     slot_a.room_id = room_id
     db.flush()
@@ -398,3 +399,28 @@ def apply_lunch_rebalance(db: Session, moves: list[LunchMove]) -> None:
                 raise ValueError("swap saknar andra session")
             _apply_swap(db, move.session_slot_id, move.session_slot_id_b)
     db.commit()
+
+
+def swap_pass2_in_room(db: Session, room_id: int) -> tuple[str, str]:
+    """Byter plats på pass2a och pass2b i samma rum (två inspiratörer)."""
+    slot_a = (
+        db.query(SessionSlot)
+        .options(joinedload(SessionSlot.placements), joinedload(SessionSlot.room))
+        .filter(SessionSlot.room_id == room_id, SessionSlot.pass_type == "pass2a")
+        .first()
+    )
+    slot_b = (
+        db.query(SessionSlot)
+        .options(joinedload(SessionSlot.placements))
+        .filter(SessionSlot.room_id == room_id, SessionSlot.pass_type == "pass2b")
+        .first()
+    )
+    if not slot_a or not slot_b:
+        raise ValueError("Rummet måste ha både pass 2a och 2b")
+    if slot_a.inspiration.strip() == slot_b.inspiration.strip():
+        raise ValueError("Två olika inspiratörer krävs för att byta plats på 2a och 2b")
+
+    insp_on_2a, insp_on_2b = slot_a.inspiration, slot_b.inspiration
+    _apply_swap(db, slot_a.id, slot_b.id)
+    db.commit()
+    return insp_on_2a, insp_on_2b

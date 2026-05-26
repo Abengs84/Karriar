@@ -1,6 +1,8 @@
 import asyncio
 import os
+import zipfile
 from datetime import datetime, timezone
+from io import BytesIO
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile
@@ -31,6 +33,10 @@ from app.helpers import (
     inspirator_pass2_variant_locked,
     is_placed_with_inspirator,
     is_unplaced_for_inspirator,
+    content_disposition_attachment,
+    placement_pdf_filename,
+    PLACEMENT_PDF_PREFIX,
+    safe_filename_part,
     schedule_pass_key,
     schedule_pass_keys_from_types,
     count_unique_unplaced_students,
@@ -67,7 +73,12 @@ from app.pdf_generator import (
     generate_school_pdf_one_per_page,
     generate_student_pdf,
 )
-from app.lunch_balance import apply_lunch_rebalance, plan_lunch_rebalance
+from app.placement_schema_pdf import (
+    generate_schema_inspirators_pdf,
+    generate_schema_overview_pdf,
+    generate_schema_rooms_pdf,
+)
+from app.lunch_balance import apply_lunch_rebalance, plan_lunch_rebalance, swap_pass2_in_room
 from app.inspirator_room_locks import (
     clear_room_locks,
     list_room_locks,
@@ -79,6 +90,8 @@ from app.schemas import (
     PreviewInspiratorStatusOut,
     BulkPlaceRequest,
     PlaceAtCellRequest,
+    BulkCreateStudentsRequest,
+    BulkCreateStudentsResult,
     ClearStudentsResult,
     ImportResult,
     RetentionStatus,
@@ -506,6 +519,24 @@ def delete_session_slot(slot_id: int, db: Session = Depends(get_db)):
     return {"ok": True, "removed_placements": len(student_ids)}
 
 
+@app.post("/api/session-slots/swap-pass2/{room_id}")
+def swap_pass2_slots_in_room(room_id: int, db: Session = Depends(get_db)):
+    """Byter plats på pass 2a och 2b i samma rum när två inspiratörer delar pass 2."""
+    room = db.query(Room).filter(Room.id == room_id).first()
+    if not room:
+        raise HTTPException(404, "Rummet hittades inte")
+    try:
+        insp_2a, insp_2b = swap_pass2_in_room(db, room_id)
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+    return {
+        "ok": True,
+        "room_name": room.name,
+        "inspiration_was_2a": insp_2a,
+        "inspiration_was_2b": insp_2b,
+    }
+
+
 # --- Students ---
 @app.get("/api/students", response_model=list[StudentOut])
 def list_students(school: str | None = None, db: Session = Depends(get_db)):
@@ -531,6 +562,57 @@ def list_schools(db: Session = Depends(get_db)):
         .order_by(Student.school)
     )
     return [{"school": r[0], "count": r[1]} for r in rows.all()]
+
+
+@app.post("/api/students/bulk", response_model=BulkCreateStudentsResult)
+def bulk_create_students(
+    data: BulkCreateStudentsRequest, db: Session = Depends(get_db)
+):
+    from app.import_excel import capitalize_person_name
+
+    existing_keys = {
+        (s.first_name.lower(), s.last_name.lower(), s.school.lower())
+        for s in db.query(Student).all()
+    }
+    created = 0
+    skipped = 0
+    skipped_names: list[str] = []
+
+    def _norm_choice(val: str | None) -> str | None:
+        if val is None:
+            return None
+        s = val.strip()
+        return s if s else None
+
+    for item in data.students:
+        first_name = capitalize_person_name(item.first_name.strip())
+        last_name = capitalize_person_name(item.last_name.strip())
+        school = item.school.strip()
+        key = (first_name.lower(), last_name.lower(), school.lower())
+        label = f"{first_name} {last_name}, {school}"
+        if key in existing_keys:
+            skipped += 1
+            skipped_names.append(label)
+            continue
+        student = Student(
+            first_name=first_name,
+            last_name=last_name,
+            school=school,
+            choice1=_norm_choice(item.choice1),
+            choice2=_norm_choice(item.choice2),
+            choice3=_norm_choice(item.choice3),
+            reserve=_norm_choice(item.reserve),
+        )
+        db.add(student)
+        existing_keys.add(key)
+        created += 1
+
+    db.commit()
+    return BulkCreateStudentsResult(
+        created=created,
+        skipped_duplicates=skipped,
+        skipped_names=skipped_names,
+    )
 
 
 @app.delete("/api/students", response_model=ClearStudentsResult)
@@ -1046,7 +1128,14 @@ def auto_solve(data: AutoSolveRequest, db: Session = Depends(get_db)):
         raise HTTPException(400, "Skapa minst ett rum innan automatisk placering.")
 
     exclusive_rooms = data.same_room_per_inspirator
-    room_locks = None
+    valid_room_ids = {r.id for r in rooms_orm}
+    room_locks: dict[str, int] | None = None
+    if data.room_locks:
+        room_locks = {}
+        for lock in data.room_locks:
+            if lock.room_id not in valid_room_ids:
+                raise HTTPException(400, f"Okänt rum (id {lock.room_id})")
+            room_locks[lock.inspiration] = lock.room_id
 
     if data.mode == "replace" and not data.dry_run:
         db.query(Placement).delete()
@@ -1097,6 +1186,9 @@ def auto_solve(data: AutoSolveRequest, db: Session = Depends(get_db)):
             hybrid_room_when_short=data.hybrid_room_when_short
             and data.same_room_per_inspirator,
             try_reserve_for_unplaced=data.try_reserve_for_unplaced,
+            minimize_sessions_for=frozenset(data.minimize_sessions_for),
+            room_locks=room_locks or {},
+            place_unplaced_pass2_share=data.place_unplaced_pass2_share,
         )
 
     if data.mode == "replace":
@@ -1257,6 +1349,70 @@ def remove_placement(placement_id: int, db: Session = Depends(get_db)):
 
 
 # --- PDF ---
+def _load_students_by_school(db: Session) -> dict[str, list[Student]]:
+    students = (
+        db.query(Student)
+        .options(
+            joinedload(Student.placements)
+            .joinedload(Placement.session_slot)
+            .joinedload(SessionSlot.room)
+        )
+        .order_by(Student.school, Student.last_name, Student.first_name)
+        .all()
+    )
+    by_school: dict[str, list[Student]] = {}
+    for student in students:
+        by_school.setdefault(student.school, []).append(student)
+    return by_school
+
+
+def _load_rooms_and_slots(db: Session) -> tuple[list[Room], list[SessionSlot]]:
+    rooms = db.query(Room).order_by(Room.name).all()
+    slots = (
+        db.query(SessionSlot)
+        .options(
+            joinedload(SessionSlot.room),
+            joinedload(SessionSlot.placements),
+        )
+        .all()
+    )
+    return rooms, slots
+
+
+@app.get("/api/pdf/placement-bundle")
+def pdf_placement_bundle(db: Session = Depends(get_db)):
+    """Zip med Schema, Rum, Inspiratör och en PDF per skola."""
+    rooms, slots = _load_rooms_and_slots(db)
+    by_school = _load_students_by_school(db)
+
+    buf = BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr(
+            placement_pdf_filename("Schema"),
+            generate_schema_overview_pdf(rooms, slots),
+        )
+        zf.writestr(
+            placement_pdf_filename("Rum"),
+            generate_schema_rooms_pdf(rooms, slots),
+        )
+        zf.writestr(
+            placement_pdf_filename("Inspiratör"),
+            generate_schema_inspirators_pdf(slots),
+        )
+        for school_name in sorted(by_school.keys(), key=lambda s: s.casefold()):
+            zf.writestr(
+                placement_pdf_filename("Skola", school_name),
+                generate_school_pdf(by_school[school_name]),
+            )
+
+    zip_name = f"{PLACEMENT_PDF_PREFIX}.zip"
+    return Response(
+        content=buf.getvalue(),
+        media_type="application/zip",
+        headers={"Content-Disposition": content_disposition_attachment(zip_name)},
+    )
+
+
 @app.get("/api/pdf/school/{school_name}")
 def pdf_for_school(school_name: str, db: Session = Depends(get_db)):
     students = (
@@ -1272,13 +1428,11 @@ def pdf_for_school(school_name: str, db: Session = Depends(get_db)):
     if not students:
         raise HTTPException(404, "Inga elever för denna skola")
     pdf_bytes = generate_school_pdf(students)
-    safe_name = school_name.replace(" ", "_")
+    filename = placement_pdf_filename("Skola", school_name)
     return Response(
         content=pdf_bytes,
         media_type="application/pdf",
-        headers={
-            "Content-Disposition": f'attachment; filename="karriar_{safe_name}.pdf"'
-        },
+        headers={"Content-Disposition": content_disposition_attachment(filename)},
     )
 
 
@@ -1297,13 +1451,12 @@ def pdf_for_school_one_per_page(school_name: str, db: Session = Depends(get_db))
     if not students:
         raise HTTPException(404, "Inga elever för denna skola")
     pdf_bytes = generate_school_pdf_one_per_page(students)
-    safe_name = school_name.replace(" ", "_")
+    base = placement_pdf_filename("Skola", school_name).removesuffix(".pdf")
+    filename = f"{base} - en per sida.pdf"
     return Response(
         content=pdf_bytes,
         media_type="application/pdf",
-        headers={
-            "Content-Disposition": f'attachment; filename="karriar_{safe_name}_en_per_sida.pdf"'
-        },
+        headers={"Content-Disposition": content_disposition_attachment(filename)},
     )
 
 
@@ -1322,13 +1475,14 @@ def pdf_for_student(student_id: int, db: Session = Depends(get_db)):
     if not student:
         raise HTTPException(404, "Eleven hittades inte")
     pdf_bytes = generate_student_pdf(student)
-    safe_name = f"{student.last_name}_{student.first_name}".replace(" ", "_")
+    filename = (
+        f"{PLACEMENT_PDF_PREFIX} - "
+        f"{safe_filename_part(student.last_name)}_{safe_filename_part(student.first_name)}.pdf"
+    )
     return Response(
         content=pdf_bytes,
         media_type="application/pdf",
-        headers={
-            "Content-Disposition": f'attachment; filename="karriar_{safe_name}.pdf"'
-        },
+        headers={"Content-Disposition": content_disposition_attachment(filename)},
     )
 
 

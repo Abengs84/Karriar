@@ -1,6 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
 import { api, type AutoSolveResult, type Room, type SessionSlot, type Student } from "./api";
 import { analyzeRoomCapacity } from "./autoPlaceCapacity";
+import {
+  collectInspirations,
+  getSuppressedInspirations,
+  studentRequiredChoices,
+} from "./placementUtils";
 import { AutoPlaceEngineExplanation } from "./autoPlaceEngineExplanation";
 import { DemandHeatmap } from "./DemandHeatmap";
 import type { ToastType } from "./Toast";
@@ -107,6 +112,10 @@ export function AutoPlaceTab({
   const [hybridRoomWhenShort, setHybridRoomWhenShort] = useState(false);
   const [prioritizeHighDemand, setPrioritizeHighDemand] = useState(true);
   const [placeUnplacedPass2Share, setPlaceUnplacedPass2Share] = useState(true);
+  const [minimizeSessionsFor, setMinimizeSessionsFor] = useState<Set<string>>(
+    () => new Set()
+  );
+  const [roomLocks, setRoomLocks] = useState<Map<string, number>>(() => new Map());
   const [preview, setPreview] = useState<AutoSolveResult | null>(null);
   const [busy, setBusy] = useState(false);
   const [busyPhase, setBusyPhase] = useState<"preview" | "apply" | null>(null);
@@ -130,6 +139,59 @@ export function AutoPlaceTab({
     [students, rooms, minStudentsThreshold]
   );
 
+  const inspiratorPickerRows = useMemo(() => {
+    if (students.length === 0) return [];
+    const suppressed = getSuppressedInspirations(students, minStudentsThreshold);
+    const demand = new Map<string, number>();
+    for (const s of students) {
+      const seen = new Set<string>();
+      for (const insp of studentRequiredChoices(s)) {
+        if (seen.has(insp)) continue;
+        seen.add(insp);
+        demand.set(insp, (demand.get(insp) ?? 0) + 1);
+      }
+    }
+    return collectInspirations(students)
+      .map((inspiration) => ({
+        inspiration,
+        demand: demand.get(inspiration) ?? 0,
+        suppressed: suppressed.has(inspiration),
+      }))
+      .sort(
+        (a, b) =>
+          b.demand - a.demand ||
+          a.inspiration.localeCompare(b.inspiration, "sv")
+      );
+  }, [students, minStudentsThreshold]);
+
+  const toggleMinimizeSessions = (inspiration: string) => {
+    setMinimizeSessionsFor((prev) => {
+      const next = new Set(prev);
+      if (next.has(inspiration)) next.delete(inspiration);
+      else next.add(inspiration);
+      return next;
+    });
+  };
+
+  const setRoomLock = (inspiration: string, roomId: number | null) => {
+    setRoomLocks((prev) => {
+      const next = new Map(prev);
+      if (roomId == null) next.delete(inspiration);
+      else next.set(inspiration, roomId);
+      return next;
+    });
+  };
+
+  const setAllMinimizeSessions = (checked: boolean) => {
+    if (!checked) {
+      setMinimizeSessionsFor(new Set());
+      return;
+    }
+    setMinimizeSessionsFor(
+      new Set(inspiratorPickerRows.map((row) => row.inspiration))
+    );
+  };
+
   const useReserve =
     solver === "cp_sat" ? true : tryReserveForUnplaced;
 
@@ -150,6 +212,17 @@ export function AutoPlaceTab({
         hybrid_room_when_short: hybridRoomWhenShort && sameRoomPerInspirator,
         prioritize_high_demand: prioritizeHighDemand,
         place_unplaced_pass2_share: placeUnplacedPass2Share,
+        ...(solver === "cp_sat" && minimizeSessionsFor.size > 0
+          ? { minimize_sessions_for: [...minimizeSessionsFor] }
+          : {}),
+        ...(roomLocks.size > 0
+          ? {
+              room_locks: [...roomLocks.entries()].map(([inspiration, room_id]) => ({
+                inspiration,
+                room_id,
+              })),
+            }
+          : {}),
       });
       if (dryRun) {
         setPreview(result);
@@ -475,6 +548,60 @@ export function AutoPlaceTab({
       </fieldset>
         </div>
 
+        {solver === "cp_sat" && inspiratorPickerRows.length > 0 && (
+          <fieldset className="auto-place-minimize-sessions auto-place-minimize-sessions-panel">
+            <div className="auto-place-minimize-sessions-head">
+              <legend>Färre sessioner – en kryssruta per inspiratör</legend>
+              <div className="auto-place-minimize-sessions-bulk">
+                <button
+                  type="button"
+                  className="link-button"
+                  disabled={busy}
+                  onClick={() => setAllMinimizeSessions(true)}
+                >
+                  Markera alla
+                </button>
+                <button
+                  type="button"
+                  className="link-button"
+                  disabled={busy}
+                  onClick={() => setAllMinimizeSessions(false)}
+                >
+                  Avmarkera alla
+                </button>
+              </div>
+            </div>
+            <p className="auto-place-option-hint">
+              Mjukt mål i CP-SAT: ikryssade inspiratörer samlar elever på så få tidspass
+              som möjligt (inom kapacitet och minst elever per session). Gäller bara
+              global optimering – testa med förhandsgranskning.
+            </p>
+            <ul className="auto-place-inspirator-picks">
+              {inspiratorPickerRows.map((row) => (
+                <li key={row.inspiration}>
+                  <label>
+                    <input
+                      type="checkbox"
+                      checked={minimizeSessionsFor.has(row.inspiration)}
+                      onChange={() => toggleMinimizeSessions(row.inspiration)}
+                      disabled={busy}
+                    />
+                    <span className="auto-place-inspirator-pick-name">
+                      {row.inspiration}
+                    </span>
+                    <span className="auto-place-inspirator-pick-meta">
+                      {row.demand > 0
+                        ? `${row.demand} val 1–3`
+                        : "endast reserv"}
+                      {row.suppressed ? " · dold" : ""}
+                    </span>
+                  </label>
+                </li>
+              ))}
+            </ul>
+          </fieldset>
+        )}
+
       <p className="auto-place-hint">
         Börja alltid med <strong>Förhandsgranska</strong>. Jämför alternativ med{" "}
         <strong>Omplacera allt</strong> – i läget «Fyll tomma» ändras sällan poäng om schemat
@@ -606,6 +733,8 @@ export function AutoPlaceTab({
           previewInspiratorStatus={
             preview?.dry_run ? preview.preview_inspirator_status ?? null : null
           }
+          roomLocks={roomLocks}
+          onRoomLockChange={setRoomLock}
         />
       </section>
     </div>

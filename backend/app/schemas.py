@@ -104,6 +104,26 @@ class ClearStudentsResult(BaseModel):
     removed_session_slots: int
 
 
+class CreateStudentIn(BaseModel):
+    first_name: str = Field(min_length=1)
+    last_name: str = Field(min_length=1)
+    school: str = Field(min_length=1)
+    choice1: str | None = None
+    choice2: str | None = None
+    choice3: str | None = None
+    reserve: str | None = None
+
+
+class BulkCreateStudentsRequest(BaseModel):
+    students: list[CreateStudentIn] = Field(min_length=1)
+
+
+class BulkCreateStudentsResult(BaseModel):
+    created: int
+    skipped_duplicates: int
+    skipped_names: list[str] = []
+
+
 class LunchTrackUpdate(BaseModel):
     lunch_track: str | None  # "2a" | "2b" | null
 
@@ -144,6 +164,11 @@ class SetStudentPassRequest(BaseModel):
     session_slot_id: int | None = None  # None = ta bort placering på passet
 
 
+class InspiratorRoomLockIn(BaseModel):
+    inspiration: str
+    room_id: int
+
+
 class InspiratorRoomLockOut(BaseModel):
     inspiration: str
     room_id: int
@@ -172,6 +197,8 @@ class AutoSolveRequest(BaseModel):
     hybrid_room_when_short: bool = False
     prioritize_high_demand: bool = True
     place_unplaced_pass2_share: bool = False
+    minimize_sessions_for: list[str] = Field(default_factory=list)
+    room_locks: list[InspiratorRoomLockIn] = Field(default_factory=list)
 
 
 class UnplacedNeedOut(BaseModel):

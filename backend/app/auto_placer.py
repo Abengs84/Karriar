@@ -587,7 +587,7 @@ def _ensure_sessions_for_high_demand(
         demand_counts.items(), key=lambda x: (-x[1], x[0])
     ):
         if demand < min_demand:
-            break
+            continue
         if any(s.inspiration == inspiration for s in slots):
             continue
         probe = next(
@@ -642,6 +642,170 @@ def _ensure_sessions_for_high_demand(
                 created += 1
                 break
     return created
+
+
+def _ensure_sessions_for_pending_inspirators(
+    slots: list[SlotRef],
+    rooms: list[RoomRef],
+    students: list[StudentRef],
+    *,
+    suppressed: set[str] | None = None,
+    inspirator_pass2_targets: dict[str, str] | None = None,
+    room_locks: dict[str, int] | None = None,
+    exclusive_one_inspirator_per_room: bool = False,
+    exclusive_inspirators: set[str] | None = None,
+    demand_counts: dict[str, int] | None = None,
+) -> int:
+    """Öppnar minst en session för inspiratörer som fortfarande saknar alla pass."""
+    pending_inspirations = {
+        need.inspiration for need in _pending_needs(students, suppressed)
+    }
+    if not pending_inspirations:
+        return 0
+
+    counts = demand_counts or _inspirator_demand_counts(students, suppressed)
+    created = 0
+    for inspiration in sorted(
+        pending_inspirations,
+        key=lambda i: (-counts.get(i, 0), i),
+    ):
+        if any(s.inspiration == inspiration for s in slots):
+            continue
+        probe = next(
+            (
+                s
+                for s in students
+                if any(
+                    c.inspiration == inspiration
+                    for c in _required_choices(s, suppressed)
+                )
+            ),
+            None,
+        )
+        if probe is None:
+            continue
+        for schedule_pass in PASS_ORDER:
+            pass_type = _pick_pass_type(
+                slots,
+                rooms,
+                inspiration,
+                schedule_pass,
+                probe,
+                students,
+                suppressed=suppressed,
+                inspirator_pass2_targets=inspirator_pass2_targets,
+                room_locks=room_locks,
+                exclusive_one_inspirator_per_room=exclusive_one_inspirator_per_room,
+                exclusive_inspirators=exclusive_inspirators,
+                demand_counts=counts,
+            )
+            if not pass_type:
+                if schedule_pass == "pass2":
+                    pass_type = (
+                        inspirator_pass2_targets.get(inspiration, "pass2a")
+                        if inspirator_pass2_targets
+                        else "pass2a"
+                    )
+                else:
+                    pass_type = schedule_pass
+            slot = _find_slot_for(
+                slots,
+                rooms,
+                inspiration,
+                pass_type,
+                students,
+                suppressed=suppressed,
+                room_locks=room_locks,
+                exclusive_one_inspirator_per_room=exclusive_one_inspirator_per_room,
+                exclusive_inspirators=exclusive_inspirators,
+                demand_counts=counts,
+            )
+            if slot:
+                created += 1
+                break
+    return created
+
+
+def _try_place_all_pending_needs(
+    students: list[StudentRef],
+    slots: list[SlotRef],
+    rooms: list[RoomRef],
+    *,
+    suppressed: set[str] | None = None,
+    inspirator_pass2_targets: dict[str, str] | None = None,
+    minimize_sessions: bool = False,
+    room_locks: dict[str, int] | None = None,
+    exclusive_one_inspirator_per_room: bool = False,
+    exclusive_inspirators: set[str] | None = None,
+    demand_counts: dict[str, int] | None = None,
+) -> int:
+    """Placerar kvarvarande val 1–3 inspiratör för inspiratör (sist i CP-SAT-kedjan)."""
+    placed = 0
+    inspirations = sorted(
+        {need.inspiration for need in _pending_needs(students, suppressed)},
+        key=lambda i: (-_pending_count_for_inspiration(students, i, suppressed), i),
+    )
+    for inspiration in inspirations:
+        for _ in range(len(students) + 1):
+            round_placed = 0
+            ordered = sorted(
+                (
+                    s
+                    for s in students
+                    if not s.has_inspirator(inspiration)
+                    and any(
+                        c.inspiration == inspiration
+                        for c in _required_choices(s, suppressed)
+                    )
+                ),
+                key=lambda s: (
+                    sum(1 for p in PASS_ORDER if not s.has_pass(p)),
+                    s.id,
+                ),
+            )
+            for student in ordered:
+                for schedule_pass in PASS_ORDER:
+                    if student.has_pass(schedule_pass):
+                        continue
+                    pass_type = _pick_pass_type(
+                        slots,
+                        rooms,
+                        inspiration,
+                        schedule_pass,
+                        student,
+                        students,
+                        minimize_sessions=minimize_sessions,
+                        suppressed=suppressed,
+                        inspirator_pass2_targets=inspirator_pass2_targets,
+                        room_locks=room_locks,
+                        exclusive_one_inspirator_per_room=exclusive_one_inspirator_per_room,
+                        exclusive_inspirators=exclusive_inspirators,
+                        demand_counts=demand_counts,
+                    )
+                    if not pass_type or not _can_assign(
+                        student, inspiration, pass_type
+                    ):
+                        continue
+                    slot = _find_slot_for(
+                        slots,
+                        rooms,
+                        inspiration,
+                        pass_type,
+                        students,
+                        minimize_sessions=minimize_sessions,
+                        suppressed=suppressed,
+                        room_locks=room_locks,
+                        exclusive_one_inspirator_per_room=exclusive_one_inspirator_per_room,
+                        exclusive_inspirators=exclusive_inspirators,
+                        demand_counts=demand_counts,
+                    )
+                    if slot and _assign(student, slot, pass_type):
+                        round_placed += 1
+                        break
+            if round_placed == 0:
+                break
+            placed += round_placed
+    return placed
 
 
 def _estimate_group_size(

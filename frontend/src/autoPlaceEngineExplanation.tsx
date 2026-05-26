@@ -122,8 +122,9 @@ export function AutoPlaceEngineExplanation() {
               målfunktionen minimerar obalans mellan antal elever på 2a respektive 2b.
             </li>
             <li>
-              <strong>Mål</strong> – Maximera viktade val (val 1 &gt; val 2 &gt; val 3) och
-              föredra färre delade rum.
+              <strong>Mål</strong> – Maximera viktade val (val 1 &gt; val 2 &gt; val 3),
+              föredra färre delade rum, balansera lunch, och (valfritt per inspiratör)
+              minimera antal aktiva tidspass för ikryssade inspiratörer.
             </li>
             <li>
               <strong>Reserv</strong> – Efter en hittad lösning körs samma reservsteg som i

@@ -330,6 +330,16 @@ export function PlacementBoard({
     };
   }, [cellMenu, dropMenu, cancelDropPlacement]);
 
+  const pass2SwapInRoom = useMemo(() => {
+    if (!cellMenu) return null;
+    const slot = cellMenu.slot;
+    if (slot.pass_type !== "pass2a" && slot.pass_type !== "pass2b") return null;
+    const otherType = slot.pass_type === "pass2a" ? "pass2b" : "pass2a";
+    const other = slots.find((s) => s.room_id === slot.room_id && s.pass_type === otherType);
+    if (!other || other.inspiration === slot.inspiration) return null;
+    return { roomId: slot.room_id, roomName: slot.room_name };
+  }, [cellMenu, slots]);
+
   const resetCell = async (slot: SessionSlot) => {
     setCellMenu(null);
     try {
@@ -344,6 +354,21 @@ export function PlacementBoard({
       await onRefresh();
     } catch (err) {
       showMsg("error", err instanceof Error ? err.message : "Kunde inte återställa");
+    }
+  };
+
+  const swapPass2InRoom = async () => {
+    if (!pass2SwapInRoom) return;
+    setCellMenu(null);
+    try {
+      const res = await api.sessionSlots.swapPass2(pass2SwapInRoom.roomId);
+      showMsg(
+        "success",
+        `Bytte plats på 2a och 2b i ${res.room_name}: «${res.inspiration_was_2a}» och «${res.inspiration_was_2b}».`
+      );
+      await onRefresh();
+    } catch (err) {
+      showMsg("error", err instanceof Error ? err.message : "Kunde inte byta plats");
     }
   };
 
@@ -663,7 +688,8 @@ export function PlacementBoard({
         <div className="slots-column card">
           <h3>Schema – rum och pass</h3>
           <p className="pool-hint" style={{ marginTop: 0 }}>
-            Högerklicka en placerad ruta för att återställa till oplacerade grupper.
+            Högerklicka en placerad ruta för att återställa till oplacerade grupper, eller byta
+            plats på 2a och 2b när två inspiratörer delar pass 2 i samma rum.
           </p>
           {rooms.length === 0 ? (
             <p style={{ color: "var(--muted)" }}>Skapa rum under fliken Rum först.</p>
@@ -776,6 +802,11 @@ export function PlacementBoard({
           style={{ left: cellMenu.x, top: cellMenu.y }}
           onClick={(e) => e.stopPropagation()}
         >
+          {pass2SwapInRoom && (
+            <button type="button" onClick={() => void swapPass2InRoom()}>
+              Byt plats på 2a och 2b
+            </button>
+          )}
           <button type="button" onClick={() => resetCell(cellMenu.slot)}>
             Återställ till oplacerade grupper
           </button>

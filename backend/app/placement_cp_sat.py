@@ -51,6 +51,10 @@ class CpSatConfig:
     hybrid_room_when_short: bool = True
     lunch_imbalance_weight: int = 50
     room_sharing_penalty: int = 10
+    minimize_sessions_weight: int = 500
+    minimize_sessions_for: frozenset[str] = frozenset()
+    room_locks: dict[str, int] = field(default_factory=dict)
+    place_unplaced_pass2_share: bool = True
     try_reserve_for_unplaced: bool = True
 
 
@@ -81,6 +85,111 @@ def _pass2_targets_from_slots(slots: list[SlotRef]) -> dict[str, str]:
         if slot.pass_type in PASS2_VARIANTS:
             targets[slot.inspiration] = slot.pass_type
     return targets
+
+
+def _apply_cp_sat_post_placement(
+    students: list[StudentRef],
+    slots: list[SlotRef],
+    rooms: list[RoomRef],
+    *,
+    suppressed: set[str],
+    cfg: CpSatConfig,
+) -> None:
+    """Fyll kvarvarande val/slot som CP-SAT lämnat (samma steg som heuristiken)."""
+    from app.auto_placer import (
+        _ensure_sessions_for_high_demand,
+        _ensure_sessions_for_pending_inspirators,
+        _inspirator_demand_counts,
+        _pending_needs,
+        _try_complete_partial_schedules,
+        _try_expand_full_sessions_for_pending,
+        _try_fill_empty_schedule_passes,
+        _try_place_all_pending_needs,
+        _try_place_unplaced_in_pass2_room_share,
+        compute_room_policy,
+    )
+
+    pass2_targets = _pass2_targets_from_slots(slots) or None
+    minimize = bool(cfg.minimize_sessions_for)
+    demand_counts = _inspirator_demand_counts(
+        students, suppressed, include_reserve=cfg.try_reserve_for_unplaced
+    )
+    room_locks = dict(cfg.room_locks)
+    exclusive_inspirators: set[str] | None = None
+    if cfg.same_room_per_inspirator:
+        policy_locks, _exclusive_all, exclusive_only, _ = compute_room_policy(
+            rooms,
+            demand_counts,
+            same_room_exclusive=True,
+            hybrid_when_short=cfg.hybrid_room_when_short,
+        )
+        for insp, rid in policy_locks.items():
+            room_locks.setdefault(insp, rid)
+        if cfg.hybrid_room_when_short and exclusive_only is not None:
+            exclusive_inspirators = exclusive_only
+
+    expand_kwargs = dict(
+        suppressed=suppressed,
+        room_locks=room_locks or None,
+        exclusive_one_inspirator_per_room=cfg.same_room_per_inspirator,
+        exclusive_inspirators=exclusive_inspirators,
+        demand_counts=demand_counts,
+    )
+    fill_kwargs = dict(
+        suppressed=suppressed,
+        inspirator_pass2_targets=pass2_targets,
+        minimize_sessions=minimize,
+        room_locks=room_locks or None,
+        exclusive_one_inspirator_per_room=cfg.same_room_per_inspirator,
+        exclusive_inspirators=exclusive_inspirators,
+        demand_counts=demand_counts,
+    )
+
+    _ensure_sessions_for_pending_inspirators(
+        slots, rooms, students, **fill_kwargs
+    )
+    _ensure_sessions_for_high_demand(
+        slots,
+        rooms,
+        demand_counts,
+        students,
+        min_demand=max(1, cfg.min_session_size),
+        **fill_kwargs,
+    )
+
+    def _run_placement_passes() -> bool:
+        progress = False
+        if _try_expand_full_sessions_for_pending(
+            students, slots, rooms, **expand_kwargs
+        ):
+            progress = True
+        if _try_place_all_pending_needs(students, slots, rooms, **fill_kwargs) > 0:
+            progress = True
+        if _try_fill_empty_schedule_passes(students, slots, rooms, **fill_kwargs):
+            progress = True
+        if cfg.place_unplaced_pass2_share:
+            n = _try_place_unplaced_in_pass2_room_share(
+                students, slots, rooms, suppressed=suppressed
+            )
+            if n > 0:
+                progress = True
+                if _try_fill_empty_schedule_passes(
+                    students, slots, rooms, **fill_kwargs
+                ):
+                    progress = True
+        if _try_complete_partial_schedules(students, slots, rooms, **fill_kwargs):
+            progress = True
+        if _try_place_all_pending_needs(students, slots, rooms, **fill_kwargs) > 0:
+            progress = True
+        return progress
+
+    for _ in range(8):
+        if not _pending_needs(students, suppressed):
+            break
+        if not _run_placement_passes():
+            break
+
+    slots[:] = [s for s in slots if len(s.student_ids) > 0]
 
 
 def _apply_reserve_fallback(
@@ -183,6 +292,14 @@ def _build_auto_solve_result(
             )
     if diag.small_sessions:
         summary += f" Varning: {len(diag.small_sessions)} session(er) under tröskel."
+    if cfg.minimize_sessions_for:
+        n = len(cfg.minimize_sessions_for)
+        summary += (
+            f" Mål: färre sessioner för {n} vald{'a' if n != 1 else ''} inspiratör{'er' if n != 1 else ''}."
+        )
+    if cfg.room_locks:
+        n = len(cfg.room_locks)
+        summary += f" {n} rumslås aktiv{'a' if n != 1 else 't'}."
 
     return AutoSolveResult(
         placed_new=placed_count,
@@ -371,6 +488,14 @@ def solve_cp_sat(
     if cfg.same_room_per_inspirator and n_insp <= n_rooms:
         model.AddAllDifferent(room_of)
 
+    room_id_to_idx = {r.id: i for i, r in enumerate(rooms)}
+    for insp, room_id in cfg.room_locks.items():
+        i_idx = insp_idx.get(insp)
+        r_idx = room_id_to_idx.get(room_id)
+        if i_idx is None or r_idx is None:
+            continue
+        model.Add(room_of[i_idx] == r_idx)
+
     # Pass 2-variant per inspiratör (0=2a, 1=2b)
     pass2_is_b: list[cp_model.IntVar] = []
     for i_idx in range(n_insp):
@@ -471,6 +596,17 @@ def solve_cp_sat(
         model.AddAbsEquality(diff, lunch_2a - lunch_2b)
         objective_terms.append(diff * (-cfg.lunch_imbalance_weight))
 
+    if cfg.minimize_sessions_for:
+        for i_idx, insp in enumerate(inspirations):
+            if insp not in cfg.minimize_sessions_for:
+                continue
+            for p in range(3):
+                active = session_active.get((i_idx, p))
+                if active is not None:
+                    objective_terms.append(
+                        active * (-cfg.minimize_sessions_weight)
+                    )
+
     model.Maximize(sum(objective_terms))
 
     solver = cp_model.CpSolver()
@@ -556,8 +692,12 @@ def solve_cp_sat(
 
     slots.extend(new_slots.values())
 
-    diag.placed_required = placed_count
-    placements_before_reserve = placed_count
+    _apply_cp_sat_post_placement(
+        students, slots, rooms, suppressed=suppressed, cfg=cfg
+    )
+
+    diag.placed_required = sum(len(s.placements) for s in students)
+    placements_before_reserve = diag.placed_required
 
     reserve_ids: set[int] = set()
     if cfg.try_reserve_for_unplaced:

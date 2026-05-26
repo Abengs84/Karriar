@@ -1,4 +1,4 @@
-﻿import { Fragment, useCallback, useEffect, useState } from "react";
+﻿import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import { fetchAuthStatus, logout } from "./auth";
 import {
   api,
@@ -21,6 +21,7 @@ import {
   countUnplacedForInspirator,
   formatChoiceRanks,
   isPlacedWithInspirator,
+  schedulePassCountByInspirator,
   studentHasFullSchedule,
   studentChoiceRanksForInspirator,
   studentsWhoChoseInspirator,
@@ -123,10 +124,16 @@ export default function App() {
   /** Uppdaterar elever + pass utan "Laddar…" – används efter drag-drop. */
   const refreshPlacement = useCallback(async () => {
     try {
-      const s = await api.students.list();
-      const sl = await api.sessionSlots.list();
+      const [s, sl, sc, st] = await Promise.all([
+        api.students.list(),
+        api.sessionSlots.list(),
+        api.schools(),
+        api.stats(),
+      ]);
       setStudents(s);
       setSlots(sl);
+      setSchools(sc);
+      setStats(st);
       return { students: s, slots: sl };
     } catch (e) {
       showMsg("error", e instanceof Error ? e.message : "Kunde inte uppdatera placering");
@@ -250,7 +257,12 @@ export default function App() {
           />
         )}
         {tab === "statistik" && (
-          <StatsTab stats={stats} students={students} onStudentClick={goToStudent} />
+          <StatsTab
+            stats={stats}
+            students={students}
+            slots={slots}
+            onStudentClick={goToStudent}
+          />
         )}
         {tab === "auto" && (
           <AutoPlaceTab
@@ -293,6 +305,7 @@ export default function App() {
           <StudentPlacementTab
             students={students}
             slots={slots}
+            schoolOptions={schools.map((s) => s.school)}
             highlightStudentId={highlightStudentId}
             onHighlightClear={() => setHighlightStudentId(null)}
             onRefresh={refreshPlacement}
@@ -450,10 +463,12 @@ function ImportTab({
 function StatsTab({
   stats,
   students,
+  slots,
   onStudentClick,
 }: {
   stats: InspiratorStat[];
   students: Student[];
+  slots: SessionSlot[];
   onStudentClick: (studentId: number) => void;
 }) {
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
@@ -467,7 +482,18 @@ function StatsTab({
     });
   };
 
-  const totalPasses = stats.reduce((sum, s) => sum + s.pass_count, 0);
+  const passCountByInspirator = useMemo(
+    () => schedulePassCountByInspirator(slots),
+    [slots]
+  );
+  const totalPasses = useMemo(
+    () =>
+      stats.reduce(
+        (sum, s) => sum + (passCountByInspirator.get(s.inspiration) ?? 0),
+        0
+      ),
+    [stats, passCountByInspirator]
+  );
   const totalChoiceSlots = totalRequiredChoiceSlots(students);
   const totalPlacedStudents = countStudentsWithAllChoicesPlaced(students);
   const totalUnplacedStudents = countStudentsWithUnplacedChoice(students);
@@ -521,7 +547,7 @@ function StatsTab({
                   </td>
                   <td>{s.inspiration}</td>
                   <td>{inspiratorStudents.length}</td>
-                  <td>{s.pass_count}</td>
+                  <td>{passCountByInspirator.get(s.inspiration) ?? 0}</td>
                   <td>
                     <span className="badge ok">{placedCount}</span>
                   </td>
@@ -650,6 +676,17 @@ function PdfTab({ schools }: { schools: { school: string; count: number }[] }) {
       <p style={{ color: "var(--muted)", fontSize: "0.9rem" }}>
         Fyra elever per sida (2×2). Kontrollera att alla pass är placerade innan export.
       </p>
+      <div className="pdf-bundle-actions" style={{ marginBottom: "1.25rem" }}>
+        <a href={api.pdfPlacementBundleUrl()} download>
+          <button type="button" className="primary">
+            Ladda ner allt som ZIP
+          </button>
+        </a>
+        <p style={{ color: "var(--muted)", fontSize: "0.85rem", margin: "0.5rem 0 0" }}>
+          Innehåller Schema (översikt), Rum, Inspiratör och en PDF per skola (
+          {schools.length + 3} filer).
+        </p>
+      </div>
       <table>
         <thead>
           <tr>

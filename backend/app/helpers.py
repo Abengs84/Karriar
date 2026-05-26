@@ -1,6 +1,41 @@
 """Shared logic for inspiratör-val vs faktiska tidspass."""
 
+import re
+
 from sqlalchemy.orm import joinedload
+
+_INVALID_FILENAME_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
+
+
+def safe_filename_part(text: str) -> str:
+    """Gör en sträng säker som del av ett nedladdningsfilnamn (behåller åäö)."""
+    s = _INVALID_FILENAME_CHARS.sub("_", text.strip())
+    s = re.sub(r"\s+", "_", s)
+    s = re.sub(r"_+", "_", s).strip("._")
+    return s or "okand"
+
+
+PLACEMENT_PDF_PREFIX = "Karriär – Placering"
+
+
+def placement_pdf_filename(kind: str, school: str | None = None) -> str:
+    """Filnamn för placering-PDF. kind: Schema, Rum, Inspiratör eller Skola."""
+    if kind == "Skola" and school:
+        school_part = _INVALID_FILENAME_CHARS.sub(" - ", school.strip())
+        school_part = re.sub(r"\s+", " ", school_part)
+        return f"{PLACEMENT_PDF_PREFIX} - Skola - {school_part}.pdf"
+    return f"{PLACEMENT_PDF_PREFIX} - {kind}.pdf"
+
+
+def content_disposition_attachment(filename: str) -> str:
+    """Content-Disposition med UTF-8-filnamn (RFC 5987)."""
+    from urllib.parse import quote
+
+    ascii_name = filename.encode("ascii", "replace").decode("ascii").replace("?", "_")
+    return (
+        f'attachment; filename="{ascii_name}"; '
+        f"filename*=UTF-8''{quote(filename, safe='')}"
+    )
 
 from app.models import Student
 

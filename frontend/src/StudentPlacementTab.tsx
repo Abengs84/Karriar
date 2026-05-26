@@ -1,11 +1,14 @@
 import { useEffect, useMemo, useState } from "react";
+import { AddLateStudentsModal } from "./AddLateStudentsModal";
 import { api, SessionSlot, Student } from "./api";
 import {
   buildAutoPassAssignments,
+  collectInspirations,
   countUnplacedSchedulePasses,
   placementAtSchedulePass,
   schedulePassKey,
   schedulePassesWithDuplicateInspiration,
+  studentChoices,
   studentHasDuplicateScheduleInspiration,
   studentHasFullSchedule,
   studentPlacementChoices,
@@ -20,6 +23,7 @@ const PASS_ROWS = [
 type Props = {
   students: Student[];
   slots: SessionSlot[];
+  schoolOptions: string[];
   highlightStudentId?: number | null;
   onHighlightClear?: () => void;
   onRefresh: () => Promise<void | { students: Student[]; slots: SessionSlot[] }>;
@@ -34,12 +38,15 @@ function slotLabel(s: SessionSlot): string {
 export function StudentPlacementTab({
   students,
   slots,
+  schoolOptions,
   highlightStudentId,
   onHighlightClear,
   onRefresh,
   showMsg,
 }: Props) {
+  const [lateModalOpen, setLateModalOpen] = useState(false);
   const [schoolFilter, setSchoolFilter] = useState("");
+  const [inspirationFilter, setInspirationFilter] = useState("");
   const [search, setSearch] = useState("");
   const [onlyUnplacedPasses, setOnlyUnplacedPasses] = useState(false);
   const [onlyDuplicateInspiration, setOnlyDuplicateInspiration] = useState(false);
@@ -73,8 +80,27 @@ export function StudentPlacementTab({
   }, [highlightStudentId, students, onHighlightClear]);
 
   const schools = useMemo(
-    () => [...new Set(students.map((s) => s.school))].sort((a, b) => a.localeCompare(b, "sv")),
-    [students]
+    () =>
+      [...new Set([...schoolOptions, ...students.map((s) => s.school)])].sort((a, b) =>
+        a.localeCompare(b, "sv")
+      ),
+    [students, schoolOptions]
+  );
+
+  const inspirations = useMemo(() => collectInspirations(students), [students]);
+
+  const lateStudentsHeader = (
+    <div className="student-pass-header">
+      <h2>Elever – individuella pass</h2>
+      <button
+        type="button"
+        className="primary"
+        onClick={() => setLateModalOpen(true)}
+        title="Lägg till sena anmälningar manuellt"
+      >
+        Sena anmälningar
+      </button>
+    </div>
   );
 
   const slotsByPass = useMemo(() => {
@@ -99,13 +125,21 @@ export function StudentPlacementTab({
       if (onlyUnplacedPasses && studentHasFullSchedule(s)) return false;
       if (onlyDuplicateInspiration && !studentHasDuplicateScheduleInspiration(s)) return false;
       if (schoolFilter && s.school !== schoolFilter) return false;
+      if (inspirationFilter && !studentChoices(s).includes(inspirationFilter)) return false;
       if (q) {
         const name = `${s.first_name} ${s.last_name}`.toLowerCase();
         if (!name.includes(q) && !s.school.toLowerCase().includes(q)) return false;
       }
       return true;
     });
-  }, [students, schoolFilter, search, onlyUnplacedPasses, onlyDuplicateInspiration]);
+  }, [
+    students,
+    schoolFilter,
+    inspirationFilter,
+    search,
+    onlyUnplacedPasses,
+    onlyDuplicateInspiration,
+  ]);
 
   const autoFillUnplaced = async () => {
     const unplacedCells = countUnplacedSchedulePasses(students);
@@ -180,18 +214,27 @@ export function StudentPlacementTab({
   if (slots.length === 0) {
     return (
       <div className="card">
-        <h2>Elever – individuella pass</h2>
+        {lateStudentsHeader}
         <p style={{ color: "var(--muted)" }}>
           Skapa pass under fliken Placering först (dra grupper till schemat). Därefter kan du finjustera
           här per elev.
         </p>
+        {lateModalOpen && (
+          <AddLateStudentsModal
+            schoolOptions={schoolOptions}
+            inspirationOptions={inspirations}
+            onClose={() => setLateModalOpen(false)}
+            onCreated={onRefresh}
+            showMsg={showMsg}
+          />
+        )}
       </div>
     );
   }
 
   return (
     <div className="card student-pass-tab">
-      <h2>Elever – individuella pass</h2>
+      {lateStudentsHeader}
       <p className="pool-hint" style={{ marginTop: 0 }}>
         Visa varje elevs val och välj rum/pass. Listorna visar sessioner för elevens val 1–3 och
         reserv (om de finns i schemat under Placering).
@@ -205,6 +248,20 @@ export function StudentPlacementTab({
             {schools.map((sc) => (
               <option key={sc} value={sc}>
                 {sc}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          Inspiratörval
+          <select
+            value={inspirationFilter}
+            onChange={(e) => setInspirationFilter(e.target.value)}
+          >
+            <option value="">Alla inspiratörer</option>
+            {inspirations.map((insp) => (
+              <option key={insp} value={insp}>
+                {insp}
               </option>
             ))}
           </select>
@@ -294,18 +351,29 @@ export function StudentPlacementTab({
                   {s.first_name} {s.last_name}
                 </td>
                 <td>{s.school}</td>
-                <td className="choice-cell" title={s.choice1 || undefined}>
-                  <span className="choice-cell-text">{s.choice1 || "—"}</span>
-                </td>
-                <td className="choice-cell" title={s.choice2 || undefined}>
-                  <span className="choice-cell-text">{s.choice2 || "—"}</span>
-                </td>
-                <td className="choice-cell" title={s.choice3 || undefined}>
-                  <span className="choice-cell-text">{s.choice3 || "—"}</span>
-                </td>
-                <td className="choice-cell" title={s.reserve || undefined}>
-                  <span className="choice-cell-text">{s.reserve || "—"}</span>
-                </td>
+                {(
+                  [
+                    ["choice1", s.choice1] as const,
+                    ["choice2", s.choice2] as const,
+                    ["choice3", s.choice3] as const,
+                    ["reserve", s.reserve] as const,
+                  ] as const
+                ).map(([field, value]) => (
+                  <td
+                    key={field}
+                    className={[
+                      "choice-cell",
+                      inspirationFilter && value === inspirationFilter
+                        ? "choice-cell-filter-match"
+                        : "",
+                    ]
+                      .filter(Boolean)
+                      .join(" ")}
+                    title={value || undefined}
+                  >
+                    <span className="choice-cell-text">{value || "—"}</span>
+                  </td>
+                ))}
                 {PASS_ROWS.map((p) => {
                   const current = placementAtSchedulePass(s, p.key);
                   const choiceOrder = studentPlacementChoices(s);
@@ -324,12 +392,17 @@ export function StudentPlacementTab({
                   }
                   const unplaced = !current;
                   const duplicateInspiration = duplicatePasses.has(p.key);
+                  const filterMatch =
+                    !!inspirationFilter &&
+                    (current?.inspiration === inspirationFilter ||
+                      options.some((sl) => sl.inspiration === inspirationFilter));
                   return (
                     <td
                       key={p.key}
                       className={[
                         unplaced ? "pass-cell-unplaced" : "",
                         duplicateInspiration ? "pass-cell-duplicate-inspiration" : "",
+                        filterMatch ? "pass-cell-filter-match" : "",
                       ]
                         .filter(Boolean)
                         .join(" ") || undefined}
@@ -340,7 +413,12 @@ export function StudentPlacementTab({
                       }
                     >
                       <select
-                        className="pass-select"
+                        className={[
+                          "pass-select",
+                          filterMatch ? "pass-select-filter-match" : "",
+                        ]
+                          .filter(Boolean)
+                          .join(" ")}
                         disabled={savingId === s.id || autoFilling}
                         value={current?.session_slot_id ?? ""}
                         onChange={(e) => {
@@ -364,6 +442,16 @@ export function StudentPlacementTab({
           </tbody>
         </table>
       </div>
+
+      {lateModalOpen && (
+        <AddLateStudentsModal
+          schoolOptions={schoolOptions}
+          inspirationOptions={inspirations}
+          onClose={() => setLateModalOpen(false)}
+          onCreated={onRefresh}
+          showMsg={showMsg}
+        />
+      )}
     </div>
   );
 }

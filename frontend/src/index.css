@@ -1452,6 +1452,75 @@ tfoot .stats-total-row td {
   font: inherit;
 }
 
+.auto-place-minimize-sessions-panel {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.85rem 1rem;
+  margin-top: 1rem;
+}
+
+.auto-place-minimize-sessions-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem 1rem;
+  margin-bottom: 0.35rem;
+}
+
+.auto-place-minimize-sessions-head legend {
+  font-size: 0.95rem;
+  font-weight: 600;
+  padding: 0;
+  margin: 0;
+}
+
+.auto-place-minimize-sessions-bulk {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.65rem 1rem;
+}
+
+.auto-place-inspirator-picks {
+  list-style: none;
+  margin: 0.5rem 0 0;
+  padding: 0;
+  max-height: min(22rem, 50vh);
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(16rem, 1fr));
+}
+
+.auto-place-inspirator-picks li {
+  border-bottom: 1px solid var(--border);
+  border-right: 1px solid var(--border);
+}
+
+.auto-place-inspirator-picks label {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.35rem 0.5rem;
+  cursor: pointer;
+  font-size: 0.88rem;
+}
+
+.auto-place-inspirator-pick-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.auto-place-inspirator-pick-meta {
+  flex-shrink: 0;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
 .auto-place-suppressed {
   font-size: 0.85rem;
   color: var(--muted);
@@ -1744,6 +1813,30 @@ tfoot .stats-total-row td {
   font-weight: 600;
   color: var(--text, #1a1a1a);
   margin-top: 0.1rem;
+}
+
+.heatmap-wish-col-head,
+.heatmap-wish-col {
+  min-width: 9rem;
+  max-width: 12rem;
+}
+
+.heatmap-wish-select {
+  width: 100%;
+  max-width: 11rem;
+  padding: 0.25rem 0.35rem;
+  font: inherit;
+  font-size: 0.8rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--surface);
+}
+
+.heatmap-wish-mismatch {
+  display: block;
+  margin-top: 0.2rem;
+  font-size: 0.72rem;
+  color: var(--warn, #b45309);
 }
 
 .heatmap-rooms-col-head {
@@ -2399,6 +2492,35 @@ tfoot .stats-total-row td {
   border-color: #ca8a04;
 }
 
+.student-pass-table td.choice-cell-filter-match {
+  background: #dbeafe;
+}
+
+.student-pass-table td.choice-cell-filter-match .choice-cell-text {
+  color: #1e40af;
+  font-weight: 600;
+}
+
+.student-pass-table td.pass-cell-filter-match {
+  background: #dbeafe;
+}
+
+.student-pass-table td.pass-cell-filter-match .pass-select,
+.student-pass-table .pass-select.pass-select-filter-match {
+  background: #eff6ff;
+  border-color: #3b82f6;
+}
+
+.student-pass-table td.pass-cell-unplaced.pass-cell-filter-match {
+  background: #dbeafe;
+}
+
+.student-pass-table td.pass-cell-unplaced.pass-cell-filter-match .pass-select,
+.student-pass-table td.pass-cell-unplaced .pass-select.pass-select-filter-match {
+  background: #eff6ff;
+  border-color: #3b82f6;
+}
+
 .inspirator-group.dragging-overlay {
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.15);
   background: #faf9f7;
@@ -2591,6 +2713,67 @@ tfoot .stats-total-row td {
   margin-top: 1rem;
   display: flex;
   justify-content: flex-end;
+}
+
+.late-students-dialog {
+  max-width: min(1100px, 96vw);
+  width: 100%;
+}
+
+.late-students-table-wrap {
+  overflow-x: auto;
+  margin: 1rem 0 0.5rem;
+}
+
+.late-students-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+
+.late-students-table th,
+.late-students-table td {
+  padding: 0.35rem 0.4rem;
+  vertical-align: middle;
+}
+
+.late-students-table input,
+.late-students-table select {
+  width: 100%;
+  min-width: 5.5rem;
+  font-size: 0.85rem;
+}
+
+.late-students-row-actions {
+  width: 2rem;
+  text-align: center;
+}
+
+.late-students-remove {
+  padding: 0.15rem 0.45rem;
+  line-height: 1.2;
+  font-size: 1.1rem;
+}
+
+.late-students-toolbar {
+  margin-bottom: 0.5rem;
+}
+
+.late-students-actions {
+  gap: 0.5rem;
+}
+
+.student-pass-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem 1rem;
+  margin-bottom: 0.5rem;
+}
+
+.student-pass-header h2 {
+  margin: 0;
 }
 
 .integritet-list {

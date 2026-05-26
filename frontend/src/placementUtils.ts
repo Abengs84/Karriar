@@ -7,6 +7,25 @@ export function schedulePassKey(passType: string): string {
   return PASS2.has(passType) ? "pass2" : passType;
 }
 
+/** Antal tidspass (1–3) per inspiratör – samma logik som /api/stats/inspirators. */
+export function schedulePassCountByInspirator(slots: SessionSlot[]): Map<string, number> {
+  const keysByInsp = new Map<string, Set<string>>();
+  for (const slot of slots) {
+    if (slot.placed_count <= 0 || !slot.inspiration) continue;
+    let keys = keysByInsp.get(slot.inspiration);
+    if (!keys) {
+      keys = new Set();
+      keysByInsp.set(slot.inspiration, keys);
+    }
+    keys.add(schedulePassKey(slot.pass_type));
+  }
+  const counts = new Map<string, number>();
+  for (const [insp, keys] of keysByInsp) {
+    counts.set(insp, keys.size);
+  }
+  return counts;
+}
+
 export function studentChoices(s: Student): string[] {
   return [s.choice1, s.choice2, s.choice3, s.reserve].filter(Boolean) as string[];
 }

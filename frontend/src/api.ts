@@ -141,6 +141,26 @@ export const api = {
   },
   students: {
     list: () => json<Student[]>(`${API}/students`),
+    createBulk: (
+      students: {
+        first_name: string;
+        last_name: string;
+        school: string;
+        choice1?: string | null;
+        choice2?: string | null;
+        choice3?: string | null;
+        reserve?: string | null;
+      }[]
+    ) =>
+      json<{
+        created: number;
+        skipped_duplicates: number;
+        skipped_names: string[];
+      }>(`${API}/students/bulk`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ students }),
+      }),
     clearAll: () =>
       json<{
         ok: boolean;
@@ -168,6 +188,13 @@ export const api = {
       json<{ ok: boolean; removed_placements: number }>(`${API}/session-slots/${id}`, {
         method: "DELETE",
       }),
+    swapPass2: (room_id: number) =>
+      json<{
+        ok: boolean;
+        room_name: string;
+        inspiration_was_2a: string;
+        inspiration_was_2b: string;
+      }>(`${API}/session-slots/swap-pass2/${room_id}`, { method: "POST" }),
   },
   import: async (file: File) => {
     const fd = new FormData();
@@ -252,6 +279,8 @@ export const api = {
       hybrid_room_when_short?: boolean;
       prioritize_high_demand?: boolean;
       place_unplaced_pass2_share?: boolean;
+      minimize_sessions_for?: string[];
+      room_locks?: { inspiration: string; room_id: number }[];
     }) =>
       json<AutoSolveResult>(`${API}/placements/auto-solve`, {
         method: "POST",
@@ -259,6 +288,7 @@ export const api = {
         body: JSON.stringify(body),
       }),
   },
+  pdfPlacementBundleUrl: () => `${API}/pdf/placement-bundle`,
   pdfUrl: (school: string) => `${API}/pdf/school/${encodeURIComponent(school)}`,
   pdfSchoolOnePerPageUrl: (school: string) =>
     `${API}/pdf/school/${encodeURIComponent(school)}/one-per-page`,

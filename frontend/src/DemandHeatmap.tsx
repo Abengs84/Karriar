@@ -274,6 +274,8 @@ type Props = {
   minStudentsThreshold: number;
   previewSlots?: SessionSlot[] | null;
   previewInspiratorStatus?: PreviewInspiratorStatus[] | null;
+  roomLocks?: Map<string, number>;
+  onRoomLockChange?: (inspiration: string, roomId: number | null) => void;
 };
 
 export function DemandHeatmap({
@@ -283,6 +285,8 @@ export function DemandHeatmap({
   minStudentsThreshold,
   previewSlots = null,
   previewInspiratorStatus = null,
+  roomLocks,
+  onRoomLockChange,
 }: Props) {
   const isPreview = previewSlots != null && previewInspiratorStatus != null;
   const displaySlots = isPreview && previewSlots ? previewSlots : slots;
@@ -300,6 +304,7 @@ export function DemandHeatmap({
     () => [...rooms].sort((a, b) => a.name.localeCompare(b.name, "sv")),
     [rooms]
   );
+  const roomWishEditable = onRoomLockChange != null && roomList.length > 0;
   const suppressed = useMemo(
     () => getSuppressedInspirations(students, minStudentsThreshold),
     [students, minStudentsThreshold]
@@ -375,6 +380,13 @@ export function DemandHeatmap({
             Mörkare fält = fler val. <strong>Rum</strong> visar sessioner i nuvarande schema. Kör
             förhandsgranskning för att se föreslagna rum.
           </>
+        )}
+        {roomWishEditable && (
+          <>
+            {" "}
+            Välj <strong>Önskat rum</strong> per inspiratör – låses vid nästa förhandsgranskning
+            och Verkställ (kräver «Ett rum per inspiratör» för CP-SAT).
+          </>
         )}{" "}
         Under tröskel{minStudentsThreshold > 0 ? ` ${minStudentsThreshold}` : ""} nedtonade.
       </p>
@@ -390,6 +402,9 @@ export function DemandHeatmap({
               <th>Elever</th>
               <th title="Elever / kapacitet i sessioner">Belastn.</th>
               <th>Oplac.</th>
+              {roomWishEditable && (
+                <th className="heatmap-wish-col-head">Önskat rum</th>
+              )}
               <th className="heatmap-rooms-col-head">Rum</th>
             </tr>
           </thead>
@@ -405,6 +420,13 @@ export function DemandHeatmap({
                 roomList,
                 displaySlots
               );
+              const wishedRoomId = roomLocks?.get(r.inspiration);
+              const wishedRoom = wishedRoomId
+                ? roomList.find((room) => room.id === wishedRoomId)
+                : undefined;
+              const previewUsesWish =
+                wishedRoomId != null &&
+                previewRoomEntries.some((e) => e.room.id === wishedRoomId);
 
               return (
                 <tr key={r.inspiration} className={hidden ? "heatmap-row-suppressed" : undefined}>
@@ -435,6 +457,37 @@ export function DemandHeatmap({
                   >
                     {unplaced || "—"}
                   </td>
+                  {roomWishEditable && onRoomLockChange && (
+                    <td className="heatmap-wish-col">
+                      <select
+                        className="heatmap-wish-select"
+                        value={wishedRoomId ?? ""}
+                        onChange={(e) => {
+                          const v = e.target.value;
+                          onRoomLockChange(
+                            r.inspiration,
+                            v === "" ? null : Number(v)
+                          );
+                        }}
+                        title="Lås inspiratören till detta rum vid auto-placering"
+                      >
+                        <option value="">—</option>
+                        {roomList.map((room) => (
+                          <option key={room.id} value={room.id}>
+                            {room.name} ({room.capacity})
+                          </option>
+                        ))}
+                      </select>
+                      {wishedRoom && isPreview && !previewUsesWish && (
+                        <span
+                          className="heatmap-wish-mismatch"
+                          title="Förhandsgranskningen följde inte önskemålet – kan bero på omöjlig kombination. Justera eller kör om."
+                        >
+                          Ej i förslag
+                        </span>
+                      )}
+                    </td>
+                  )}
                   <RoomsCell
                     previewEntries={isPreview ? previewRoomEntries : currentRoomEntries}
                     currentEntries={currentRoomEntries}
