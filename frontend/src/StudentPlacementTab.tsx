@@ -393,9 +393,7 @@ export function StudentPlacementTab({
                   const unplaced = !current;
                   const duplicateInspiration = duplicatePasses.has(p.key);
                   const filterMatch =
-                    !!inspirationFilter &&
-                    (current?.inspiration === inspirationFilter ||
-                      options.some((sl) => sl.inspiration === inspirationFilter));
+                    !!inspirationFilter && current?.inspiration === inspirationFilter;
                   return (
                     <td
                       key={p.key}

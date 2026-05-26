@@ -402,7 +402,7 @@ export function inspiratorBookedElsewhereAtPass(
   passType: string,
   roomId: number
 ): SessionSlot | undefined {
-  const actualPass = resolvePlacementPassType(passType, slots, inspiration);
+  const actualPass = resolvePlacementPassType(passType, slots, inspiration, roomId);
   return slots.find(
     (s) =>
       s.inspiration === inspiration &&
@@ -415,9 +415,22 @@ export function inspiratorBookedElsewhereAtPass(
 export function resolvePlacementPassType(
   passType: string,
   slots: SessionSlot[],
-  inspiration: string
+  inspiration: string,
+  roomId?: number
 ): string {
   if (passType === "pass2") {
+    const locked = inspiratorPass2VariantLocked(slots, inspiration);
+    if (locked) return locked;
+
+    if (roomId != null) {
+      const slot2a = slots.find((s) => s.room_id === roomId && s.pass_type === "pass2a");
+      const slot2b = slots.find((s) => s.room_id === roomId && s.pass_type === "pass2b");
+      const ok2a = !slot2a || slot2a.placed_count === 0 || slot2a.inspiration === inspiration;
+      const ok2b = !slot2b || slot2b.placed_count === 0 || slot2b.inspiration === inspiration;
+      if (ok2a && !ok2b) return "pass2a";
+      if (ok2b && !ok2a) return "pass2b";
+    }
+
     return resolveInspiratorPass2Variant(slots, inspiration);
   }
   return passType;

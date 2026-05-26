@@ -656,7 +656,12 @@ def _ensure_sessions_for_pending_inspirators(
     exclusive_inspirators: set[str] | None = None,
     demand_counts: dict[str, int] | None = None,
 ) -> int:
-    """Öppnar minst en session för inspiratörer som fortfarande saknar alla pass."""
+    """Öppnar sessioner för inspiratörer som har pending elever.
+
+    Viktigt: om en inspiratör redan har minst ett pass ska vi ändå kunna öppna
+    saknade pass (t.ex. bara pass1 finns i DB men pass2 saknas) – annars kan en
+    hel grupp bli oplacerad trots ledigt tidspass hos eleverna.
+    """
     pending_inspirations = {
         need.inspiration for need in _pending_needs(students, suppressed)
     }
@@ -669,8 +674,9 @@ def _ensure_sessions_for_pending_inspirators(
         pending_inspirations,
         key=lambda i: (-counts.get(i, 0), i),
     ):
-        if any(s.inspiration == inspiration for s in slots):
-            continue
+        # Om inspiratören redan har pass: öppna saknade tidspass (1/2/3) vid behov.
+        existing_keys = _inspirator_schedule_pass_keys(slots, inspiration)
+        missing_schedule = [p for p in PASS_ORDER if p not in existing_keys]
         probe = next(
             (
                 s
@@ -684,7 +690,8 @@ def _ensure_sessions_for_pending_inspirators(
         )
         if probe is None:
             continue
-        for schedule_pass in PASS_ORDER:
+        open_order = missing_schedule if missing_schedule else PASS_ORDER
+        for schedule_pass in open_order:
             pass_type = _pick_pass_type(
                 slots,
                 rooms,
@@ -722,8 +729,383 @@ def _ensure_sessions_for_pending_inspirators(
             )
             if slot:
                 created += 1
+                # Om vi öppnade ett saknat pass: fortsätt och öppna nästa saknade.
+                if missing_schedule:
+                    continue
                 break
     return created
+
+
+def _schedule_passes_for_placement_attempt(
+    slots: list[SlotRef], inspiration: str
+) -> list[SchedulePass]:
+    """Saknade inspiratörspass först, sedan pass med mest ledig kapacitet."""
+    insp_keys = _inspirator_schedule_pass_keys(slots, inspiration)
+    missing = [p for p in PASS_ORDER if p not in insp_keys]
+
+    def remaining_at(sp: SchedulePass) -> int:
+        key = "pass2" if sp == "pass2" else sp
+        return sum(
+            s.remaining
+            for s in slots
+            if s.inspiration == inspiration
+            and schedule_pass_key(s.pass_type) == key
+        )
+
+    existing = sorted(
+        [p for p in PASS_ORDER if p in insp_keys],
+        key=lambda p: (-remaining_at(p), PASS_ORDER.index(p)),
+    )
+    return missing + existing
+
+
+def _seed_missing_schedule_passes_at_room(
+    slots: list[SlotRef],
+    rooms: list[RoomRef],
+    inspiration: str,
+    room_id: int,
+    *,
+    inspirator_pass2_targets: dict[str, str] | None = None,
+) -> int:
+    """Skapar tomma pass 1/2/3 i givet rum om inspiratören saknar tidspass där."""
+    room_map = {r.id: r for r in rooms}
+    room = room_map.get(room_id)
+    if not room:
+        return 0
+    occ = _room_pass_occupant(slots)
+    insp_keys = _inspirator_schedule_pass_keys(slots, inspiration)
+    locked_p2 = _inspirator_pass2_variant_locked(slots, inspiration)
+    if locked_p2:
+        pass2_type = locked_p2
+    elif inspirator_pass2_targets and inspiration in inspirator_pass2_targets:
+        pass2_type = inspirator_pass2_targets[inspiration]
+    else:
+        pass2_type = "pass2a"
+
+    to_create: list[str] = []
+    if "pass1" not in insp_keys:
+        to_create.append("pass1")
+    if "pass2" not in insp_keys:
+        to_create.append(pass2_type)
+    if "pass3" not in insp_keys:
+        to_create.append("pass3")
+
+    created = 0
+    for pass_type in to_create:
+        key = (room_id, pass_type)
+        if key in occ and occ[key] != inspiration:
+            continue
+        if any(
+            s.room_id == room_id
+            and s.pass_type == pass_type
+            and s.inspiration == inspiration
+            for s in slots
+        ):
+            continue
+        if not can_add_inspirator_schedule_pass(insp_keys, pass_type):
+            continue
+        slots.append(
+            SlotRef(
+                id=None,
+                room_id=room_id,
+                pass_type=pass_type,
+                inspiration=inspiration,
+                capacity=room.capacity,
+            )
+        )
+        occ[key] = inspiration
+        insp_keys.add(schedule_pass_key(pass_type))
+        created += 1
+    return created
+
+
+def _seed_missing_passes_for_pending_inspirators(
+    slots: list[SlotRef],
+    rooms: list[RoomRef],
+    students: list[StudentRef],
+    *,
+    suppressed: set[str] | None = None,
+    inspirator_pass2_targets: dict[str, str] | None = None,
+    room_locks: dict[str, int] | None = None,
+) -> int:
+    """Öppnar saknade pass 1/2/3 i inspiratörens rum när minst ett pass redan finns."""
+    pending = {need.inspiration for need in _pending_needs(students, suppressed)}
+    if not pending:
+        return 0
+    created = 0
+    for inspiration in sorted(pending):
+        if not any(s.inspiration == inspiration for s in slots):
+            continue
+        room_id = _inspirator_preferred_room_id(slots, inspiration, room_locks)
+        if room_id is None:
+            continue
+        created += _seed_missing_schedule_passes_at_room(
+            slots,
+            rooms,
+            inspiration,
+            room_id,
+            inspirator_pass2_targets=inspirator_pass2_targets,
+        )
+    return created
+
+
+def _get_or_create_slot(
+    slots: list[SlotRef],
+    rooms: list[RoomRef],
+    inspiration: str,
+    pass_type: str,
+    students: list[StudentRef] | None = None,
+    *,
+    suppressed: set[str] | None = None,
+    inspirator_pass2_targets: dict[str, str] | None = None,
+    room_locks: dict[str, int] | None = None,
+    exclusive_one_inspirator_per_room: bool = False,
+    exclusive_inspirators: set[str] | None = None,
+    demand_counts: dict[str, int] | None = None,
+) -> SlotRef | None:
+    """Hitta eller skapa slot; öppnar saknade pass i låst/prefererat rum vid behov."""
+    slot = _find_slot_for(
+        slots,
+        rooms,
+        inspiration,
+        pass_type,
+        students,
+        minimize_sessions=False,
+        suppressed=suppressed,
+        room_locks=room_locks,
+        exclusive_one_inspirator_per_room=exclusive_one_inspirator_per_room,
+        exclusive_inspirators=exclusive_inspirators,
+        demand_counts=demand_counts,
+    )
+    if slot is not None and slot.remaining > 0:
+        return slot
+    room_id = _inspirator_preferred_room_id(slots, inspiration, room_locks)
+    if room_id is not None:
+        _seed_missing_schedule_passes_at_room(
+            slots,
+            rooms,
+            inspiration,
+            room_id,
+            inspirator_pass2_targets=inspirator_pass2_targets,
+        )
+    return _find_slot_for(
+        slots,
+        rooms,
+        inspiration,
+        pass_type,
+        students,
+        minimize_sessions=False,
+        suppressed=suppressed,
+        room_locks=room_locks,
+        exclusive_one_inspirator_per_room=exclusive_one_inspirator_per_room,
+        exclusive_inspirators=exclusive_inspirators,
+        demand_counts=demand_counts,
+    )
+
+
+def _hard_complete_all_pending(
+    students: list[StudentRef],
+    slots: list[SlotRef],
+    rooms: list[RoomRef],
+    *,
+    suppressed: set[str] | None = None,
+    inspirator_pass2_targets: dict[str, str] | None = None,
+    room_locks: dict[str, int] | None = None,
+    exclusive_one_inspirator_per_room: bool = False,
+    exclusive_inspirators: set[str] | None = None,
+    demand_counts: dict[str, int] | None = None,
+) -> int:
+    """Sista steg: placera kvarvarande val 1–3 med saknade pass först."""
+    placed = 0
+    slot_kwargs = dict(
+        suppressed=suppressed,
+        inspirator_pass2_targets=inspirator_pass2_targets,
+        room_locks=room_locks,
+        exclusive_one_inspirator_per_room=exclusive_one_inspirator_per_room,
+        exclusive_inspirators=exclusive_inspirators,
+        demand_counts=demand_counts,
+    )
+    pick_kwargs = dict(
+        minimize_sessions=False,
+        **slot_kwargs,
+    )
+
+    for _ in range(len(students) + 12):
+        if not _pending_needs(students, suppressed):
+            break
+        _seed_missing_passes_for_pending_inspirators(
+            slots,
+            rooms,
+            students,
+            suppressed=suppressed,
+            inspirator_pass2_targets=inspirator_pass2_targets,
+            room_locks=room_locks,
+        )
+        round_placed = 0
+        inspirations = sorted(
+            {n.inspiration for n in _pending_needs(students, suppressed)},
+            key=lambda i: (
+                -_pending_count_for_inspiration(students, i, suppressed),
+                i,
+            ),
+        )
+        for inspiration in inspirations:
+            pass_order = _schedule_passes_for_placement_attempt(slots, inspiration)
+            ordered = sorted(
+                (
+                    s
+                    for s in students
+                    if not s.has_inspirator(inspiration)
+                    and any(
+                        c.inspiration == inspiration
+                        for c in _required_choices(s, suppressed)
+                    )
+                ),
+                key=lambda s: (
+                    sum(1 for p in PASS_ORDER if not s.has_pass(p)),
+                    s.id,
+                ),
+            )
+            for student in ordered:
+                for schedule_pass in pass_order:
+                    if student.has_pass(schedule_pass):
+                        continue
+                    pass_type = _pick_pass_type(
+                        slots,
+                        rooms,
+                        inspiration,
+                        schedule_pass,
+                        student,
+                        students,
+                        **pick_kwargs,
+                    )
+                    if not pass_type:
+                        if schedule_pass == "pass2":
+                            pass_type = (
+                                inspirator_pass2_targets.get(inspiration, "pass2a")
+                                if inspirator_pass2_targets
+                                else "pass2a"
+                            )
+                        else:
+                            pass_type = schedule_pass
+                    if not _can_assign(student, inspiration, pass_type):
+                        continue
+                    slot = _get_or_create_slot(
+                        slots,
+                        rooms,
+                        inspiration,
+                        pass_type,
+                        students,
+                        **slot_kwargs,
+                    )
+                    if slot and _assign(student, slot, pass_type):
+                        round_placed += 1
+                        break
+        placed += round_placed
+        if round_placed == 0:
+            break
+    return placed
+
+
+def run_post_placement_finalize(
+    students: list[StudentRef],
+    slots: list[SlotRef],
+    rooms: list[RoomRef],
+    *,
+    suppressed: set[str],
+    inspirator_pass2_targets: dict[str, str] | None = None,
+    room_locks: dict[str, int] | None = None,
+    exclusive_one_inspirator_per_room: bool = False,
+    exclusive_inspirators: set[str] | None = None,
+    demand_counts: dict[str, int] | None = None,
+    minimize_sessions: bool = False,
+    place_unplaced_pass2_share: bool = True,
+    seed_locked_sessions: bool = True,
+    min_session_size: int = 1,
+) -> int:
+    """CP-SAT/heuristik: fyll kvarvarande val, öppna saknade pass, hard-complete."""
+    if demand_counts is None:
+        demand_counts = _inspirator_demand_counts(students, suppressed)
+
+    if seed_locked_sessions and room_locks:
+        _seed_locked_inspirator_sessions(
+            slots,
+            rooms,
+            room_locks,
+            inspirator_pass2_targets=inspirator_pass2_targets,
+            demand_counts=demand_counts,
+        )
+
+    session_kwargs = dict(
+        suppressed=suppressed,
+        inspirator_pass2_targets=inspirator_pass2_targets,
+        room_locks=room_locks,
+        exclusive_one_inspirator_per_room=exclusive_one_inspirator_per_room,
+        exclusive_inspirators=exclusive_inspirators,
+        demand_counts=demand_counts,
+    )
+    fill_kwargs = dict(**session_kwargs, minimize_sessions=minimize_sessions)
+    expand_kwargs = {
+        k: v
+        for k, v in session_kwargs.items()
+        if k != "inspirator_pass2_targets"
+    }
+
+    seed_kwargs = dict(
+        suppressed=suppressed,
+        inspirator_pass2_targets=inspirator_pass2_targets,
+        room_locks=room_locks,
+    )
+    _seed_missing_passes_for_pending_inspirators(slots, rooms, students, **seed_kwargs)
+    _ensure_sessions_for_pending_inspirators(slots, rooms, students, **session_kwargs)
+    high_demand_kwargs = {
+        k: v
+        for k, v in session_kwargs.items()
+        if k != "demand_counts"
+    }
+    _ensure_sessions_for_high_demand(
+        slots,
+        rooms,
+        demand_counts,
+        students,
+        min_demand=max(1, min_session_size),
+        **high_demand_kwargs,
+    )
+
+    def _run_passes() -> bool:
+        progress = False
+        if _try_expand_full_sessions_for_pending(students, slots, rooms, **expand_kwargs):
+            progress = True
+        if _try_place_all_pending_needs(students, slots, rooms, **fill_kwargs) > 0:
+            progress = True
+        if _try_fill_empty_schedule_passes(students, slots, rooms, **fill_kwargs):
+            progress = True
+        if place_unplaced_pass2_share:
+            n = _try_place_unplaced_in_pass2_room_share(
+                students, slots, rooms, suppressed=suppressed
+            )
+            if n > 0:
+                progress = True
+                if _try_fill_empty_schedule_passes(students, slots, rooms, **fill_kwargs):
+                    progress = True
+        if _try_complete_partial_schedules(students, slots, rooms, **fill_kwargs):
+            progress = True
+        if _try_place_all_pending_needs(students, slots, rooms, **fill_kwargs) > 0:
+            progress = True
+        return progress
+
+    for _ in range(8):
+        if not _pending_needs(students, suppressed):
+            break
+        if not _run_passes():
+            break
+
+    _seed_missing_passes_for_pending_inspirators(slots, rooms, students, **seed_kwargs)
+    _hard_complete_all_pending(students, slots, rooms, **session_kwargs)
+
+    _rebuild_slot_student_ids_from_placements(students, slots)
+    slots[:] = [s for s in slots if len(s.student_ids) > 0]
+    return len(_pending_needs(students, suppressed))
 
 
 def _try_place_all_pending_needs(
@@ -763,8 +1145,9 @@ def _try_place_all_pending_needs(
                     s.id,
                 ),
             )
+            pass_order = _schedule_passes_for_placement_attempt(slots, inspiration)
             for student in ordered:
-                for schedule_pass in PASS_ORDER:
+                for schedule_pass in pass_order:
                     if student.has_pass(schedule_pass):
                         continue
                     pass_type = _pick_pass_type(

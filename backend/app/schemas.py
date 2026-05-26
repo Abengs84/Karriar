@@ -234,5 +234,9 @@ class AutoSolveOut(BaseModel):
     reserve_placed_count: int = 0
     preview_slots: list[SessionSlotOut] | None = None
     preview_inspirator_status: list[PreviewInspiratorStatusOut] | None = None
+    # CP-SAT: status från solver (t.ex. OPTIMAL/FEASIBLE/INFEASIBLE/UNKNOWN)
+    solver_status: str | None = None
+    # CP-SAT: korta hintar om varför det kan vara infeasible
+    solver_hints: list[str] | None = None
     # Vid dry_run: oplacerade i nuvarande databas (Placering-fliken före Verkställ).
     db_unplaced_student_count: int | None = None

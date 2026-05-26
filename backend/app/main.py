@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import os
 import zipfile
 from datetime import datetime, timezone
@@ -41,9 +42,11 @@ from app.helpers import (
     schedule_pass_keys_from_types,
     count_unique_unplaced_students,
     effective_required_choices_list,
+    student_choices,
     student_chose,
     student_chose_for_placement,
     student_chose_required,
+    student_has_full_schedule,
     would_conflict_inspirator_pass2,
     would_exceed_inspirator_pass_limit,
 )
@@ -115,6 +118,7 @@ from app.schemas import (
 )
 
 app = FastAPI(title="Karriär")
+logger = logging.getLogger(__name__)
 
 PUBLIC_API_PATHS = frozenset({
     "/api/health",
@@ -1175,7 +1179,14 @@ def auto_solve(data: AutoSolveRequest, db: Session = Depends(get_db)):
     )
 
     use_cp_sat = data.solver == "cp_sat"
+    placement_debug = os.getenv("PLACEMENT_DEBUG", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
     cp_sat_config = None
+    cp_sat_diag = None
     if use_cp_sat:
         from app.placement_cp_sat import CpSatConfig, solve_cp_sat
 
@@ -1207,7 +1218,7 @@ def auto_solve(data: AutoSolveRequest, db: Session = Depends(get_db)):
         rooms = [RoomRef(r.id, r.name, r.capacity) for r in rooms_orm]
         slots: list[SlotRef] = []
         if use_cp_sat:
-            students, slots, result, _diag = solve_cp_sat(
+            students, slots, result, cp_sat_diag = solve_cp_sat(
                 students,
                 rooms,
                 slots,
@@ -1228,11 +1239,66 @@ def auto_solve(data: AutoSolveRequest, db: Session = Depends(get_db)):
 
     expected_placements = sum(len(s.placements) for s in students)
 
+    if placement_debug and use_cp_sat and data.mode == "replace":
+        pending_by_insp: dict[str, int] = {}
+        for need in result.unplaced_needs:
+            pending_by_insp[need.inspiration] = (
+                pending_by_insp.get(need.inspiration, 0) + 1
+            )
+        top_pending = sorted(
+            pending_by_insp.items(),
+            key=lambda x: (-x[1], x[0]),
+        )[:8]
+        slot_passes: dict[str, set[str]] = {}
+        for sl in slots:
+            slot_passes.setdefault(sl.inspiration, set()).add(schedule_pass_key(sl.pass_type))
+        pending_snap = []
+        for insp, count in top_pending:
+            pending_snap.append(
+                {
+                    "inspiration": insp,
+                    "pending": count,
+                    "schedule_passes": sorted(slot_passes.get(insp, set())),
+                    "slots": sorted(
+                        [
+                            f"{sl.room_id}:{sl.pass_type}:{len(sl.student_ids)}/{sl.capacity}"
+                            for sl in slots
+                            if sl.inspiration == insp
+                        ]
+                    ),
+                }
+            )
+        logger.warning(
+            "PLACEMENT_DEBUG before_apply solver=%s status=%s unplaced=%s expected_placements=%s pending_snap=%s",
+            data.solver,
+            cp_sat_diag.status if cp_sat_diag else None,
+            len(result.unplaced_needs),
+            expected_placements,
+            pending_snap,
+        )
+
     db_unplaced_students = 0
     apply_skipped = 0
     placements_in_db = 0
     if not data.dry_run:
         if data.mode == "replace":
+            if use_cp_sat and cp_sat_config is not None:
+                from app.placement_cp_sat import finalize_cp_sat_before_db_apply
+
+                suppressed_set = set(result.suppressed_inspirators)
+                left_after_finalize = finalize_cp_sat_before_db_apply(
+                    students,
+                    slots,
+                    rooms,
+                    suppressed=suppressed_set,
+                    cfg=cp_sat_config,
+                )
+                if placement_debug:
+                    logger.warning(
+                        "PLACEMENT_DEBUG after_finalize left_pending=%s slots=%s",
+                        left_after_finalize,
+                        len(slots),
+                    )
             _, apply_skipped = apply_replace_solution_to_db(
                 db,
                 students_orm,
@@ -1266,6 +1332,95 @@ def auto_solve(data: AutoSolveRequest, db: Session = Depends(get_db)):
         db_unplaced_students = count_unique_unplaced_students(
             students_orm, data.min_students_threshold
         )
+
+    if placement_debug and use_cp_sat and data.mode == "replace":
+        logger.warning(
+            "PLACEMENT_DEBUG after_apply placements_in_db=%s apply_skipped=%s db_unplaced_students=%s board_unplaced_students=%s",
+            placements_in_db,
+            apply_skipped,
+            db_unplaced_students,
+            board_unplaced_students,
+        )
+        try:
+            # DB-baserad snapshot: vilka inspiratörer har oplacerade elever, och vilka pass finns i DB.
+            sup_db = suppressed_inspirations(students_orm, data.min_students_threshold)
+            unplaced_by_insp: dict[str, list[int]] = {}
+            for s in students_orm:
+                for insp in effective_required_choices_list(s, sup_db):
+                    if is_unplaced_for_inspirator(s, insp, suppressed=sup_db):
+                        unplaced_by_insp.setdefault(insp, []).append(s.id)
+
+            # Map inspiration -> set of schedule pass keys present in DB
+            pass_keys_by_insp: dict[str, set[str]] = {}
+            for slot in db.query(SessionSlot).all():
+                if not slot.inspiration:
+                    continue
+                pass_keys_by_insp.setdefault(slot.inspiration, set()).add(
+                    schedule_pass_key(slot.pass_type)
+                )
+
+            top = sorted(
+                unplaced_by_insp.items(),
+                key=lambda x: (-len(x[1]), x[0]),
+            )[:8]
+            snap = [
+                {
+                    "inspiration": insp,
+                    "unplaced_students": len(ids),
+                    "sample_student_ids": ids[:12],
+                    "schedule_passes_in_db": sorted(pass_keys_by_insp.get(insp, set())),
+                }
+                for insp, ids in top
+            ]
+            logger.warning("PLACEMENT_DEBUG db_unplaced_snap=%s", snap)
+
+            # Första inspiratören: dumpa några elevers faktiska pass i DB.
+            if top:
+                insp0, ids0 = top[0]
+                idset = set(ids0[:6])
+                picked = [s for s in students_orm if s.id in idset]
+                details = []
+                for s in sorted(picked, key=lambda x: x.id):
+                    by_pass = {}
+                    for p in s.placements:
+                        slot = p.session_slot
+                        if not slot:
+                            continue
+                        by_pass[schedule_pass_key(slot.pass_type)] = slot.inspiration
+                    details.append(
+                        {
+                            "student_id": s.id,
+                            "full_schedule": student_has_full_schedule(s),
+                            "choices": sorted(list(student_choices(s))),
+                            "by_pass": by_pass,
+                            "has_insp": is_placed_with_inspirator(s, insp0),
+                        }
+                    )
+                slots0 = (
+                    db.query(SessionSlot)
+                    .filter(SessionSlot.inspiration == insp0)
+                    .all()
+                )
+                slot_rows = sorted(
+                    [
+                        {
+                            "room_id": sl.room_id,
+                            "pass_type": sl.pass_type,
+                            "key": schedule_pass_key(sl.pass_type),
+                            "placed": len(sl.placements),
+                        }
+                        for sl in slots0
+                    ],
+                    key=lambda r: (r["key"], r["room_id"], r["pass_type"]),
+                )
+                logger.warning(
+                    "PLACEMENT_DEBUG db_unplaced_details inspiration=%s students=%s slots=%s",
+                    insp0,
+                    details,
+                    slot_rows,
+                )
+        except Exception as e:
+            logger.exception("PLACEMENT_DEBUG db_unplaced_snap failed: %s", e)
 
     student_by_id = {s.id: s for s in students_orm}
     sample = [
@@ -1324,6 +1479,8 @@ def auto_solve(data: AutoSolveRequest, db: Session = Depends(get_db)):
         reserve_placed_count=result.reserve_placed_count,
         preview_slots=preview_slots,
         preview_inspirator_status=preview_inspirator_status,
+        solver_status=(cp_sat_diag.status if cp_sat_diag else None),
+        solver_hints=(cp_sat_diag.infeasible_hints if cp_sat_diag else None),
         db_unplaced_student_count=db_unplaced_students if data.dry_run else None,
     )
 

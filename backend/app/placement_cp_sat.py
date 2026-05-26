@@ -7,7 +7,7 @@ tillåten lösning (eller bevisar att ingen finns) under angivna hårda regler:
 - Varje elev får exakt sina val 1–3 (efter dedup/reserv) på pass 1, 2 och 3.
 - Högst ett möte per inspiratör och elev.
 - Högst tre tidspass per inspiratör (pass 1, 2, 3).
-- Inga sessioner med färre än min_session_size elever.
+- Straff för sessioner med färre än min_session_size elever (mjuk regel).
 - Rumskapacitet och högst en inspiratör per (rum, passtyp) samtidigt.
 - Ett rum per inspiratör när det räcker; vid rumsbrist delar minst valda rum.
 - Lunchspår 2a/2b per inspiratör (låst) med balansering i målfunktionen.
@@ -50,6 +50,7 @@ class CpSatConfig:
     same_room_per_inspirator: bool = True
     hybrid_room_when_short: bool = True
     lunch_imbalance_weight: int = 50
+    small_session_penalty_weight: int = 200
     room_sharing_penalty: int = 10
     minimize_sessions_weight: int = 500
     minimize_sessions_for: frozenset[str] = frozenset()
@@ -87,30 +88,17 @@ def _pass2_targets_from_slots(slots: list[SlotRef]) -> dict[str, str]:
     return targets
 
 
-def _apply_cp_sat_post_placement(
+def _cp_sat_post_placement_kwargs(
     students: list[StudentRef],
     slots: list[SlotRef],
     rooms: list[RoomRef],
     *,
     suppressed: set[str],
     cfg: CpSatConfig,
-) -> None:
-    """Fyll kvarvarande val/slot som CP-SAT lämnat (samma steg som heuristiken)."""
-    from app.auto_placer import (
-        _ensure_sessions_for_high_demand,
-        _ensure_sessions_for_pending_inspirators,
-        _inspirator_demand_counts,
-        _pending_needs,
-        _try_complete_partial_schedules,
-        _try_expand_full_sessions_for_pending,
-        _try_fill_empty_schedule_passes,
-        _try_place_all_pending_needs,
-        _try_place_unplaced_in_pass2_room_share,
-        compute_room_policy,
-    )
+) -> dict:
+    from app.auto_placer import _inspirator_demand_counts, compute_room_policy
 
     pass2_targets = _pass2_targets_from_slots(slots) or None
-    minimize = bool(cfg.minimize_sessions_for)
     demand_counts = _inspirator_demand_counts(
         students, suppressed, include_reserve=cfg.try_reserve_for_unplaced
     )
@@ -128,68 +116,56 @@ def _apply_cp_sat_post_placement(
         if cfg.hybrid_room_when_short and exclusive_only is not None:
             exclusive_inspirators = exclusive_only
 
-    expand_kwargs = dict(
-        suppressed=suppressed,
-        room_locks=room_locks or None,
-        exclusive_one_inspirator_per_room=cfg.same_room_per_inspirator,
-        exclusive_inspirators=exclusive_inspirators,
-        demand_counts=demand_counts,
-    )
-    fill_kwargs = dict(
+    return dict(
         suppressed=suppressed,
         inspirator_pass2_targets=pass2_targets,
-        minimize_sessions=minimize,
         room_locks=room_locks or None,
         exclusive_one_inspirator_per_room=cfg.same_room_per_inspirator,
         exclusive_inspirators=exclusive_inspirators,
         demand_counts=demand_counts,
+        minimize_sessions=False,
+        place_unplaced_pass2_share=cfg.place_unplaced_pass2_share,
+        seed_locked_sessions=True,
+        min_session_size=cfg.min_session_size,
     )
 
-    _ensure_sessions_for_pending_inspirators(
-        slots, rooms, students, **fill_kwargs
-    )
-    _ensure_sessions_for_high_demand(
+
+def _apply_cp_sat_post_placement(
+    students: list[StudentRef],
+    slots: list[SlotRef],
+    rooms: list[RoomRef],
+    *,
+    suppressed: set[str],
+    cfg: CpSatConfig,
+) -> None:
+    """Fyll kvarvarande val/slot som CP-SAT lämnat (samma steg som heuristiken)."""
+    from app.auto_placer import run_post_placement_finalize
+
+    run_post_placement_finalize(
+        students,
         slots,
         rooms,
-        demand_counts,
-        students,
-        min_demand=max(1, cfg.min_session_size),
-        **fill_kwargs,
+        **_cp_sat_post_placement_kwargs(students, slots, rooms, suppressed=suppressed, cfg=cfg),
     )
 
-    def _run_placement_passes() -> bool:
-        progress = False
-        if _try_expand_full_sessions_for_pending(
-            students, slots, rooms, **expand_kwargs
-        ):
-            progress = True
-        if _try_place_all_pending_needs(students, slots, rooms, **fill_kwargs) > 0:
-            progress = True
-        if _try_fill_empty_schedule_passes(students, slots, rooms, **fill_kwargs):
-            progress = True
-        if cfg.place_unplaced_pass2_share:
-            n = _try_place_unplaced_in_pass2_room_share(
-                students, slots, rooms, suppressed=suppressed
-            )
-            if n > 0:
-                progress = True
-                if _try_fill_empty_schedule_passes(
-                    students, slots, rooms, **fill_kwargs
-                ):
-                    progress = True
-        if _try_complete_partial_schedules(students, slots, rooms, **fill_kwargs):
-            progress = True
-        if _try_place_all_pending_needs(students, slots, rooms, **fill_kwargs) > 0:
-            progress = True
-        return progress
 
-    for _ in range(8):
-        if not _pending_needs(students, suppressed):
-            break
-        if not _run_placement_passes():
-            break
+def finalize_cp_sat_before_db_apply(
+    students: list[StudentRef],
+    slots: list[SlotRef],
+    rooms: list[RoomRef],
+    *,
+    suppressed: set[str],
+    cfg: CpSatConfig,
+) -> int:
+    """Kör post-placering igen före DB-skrivning (t.ex. efter reservsteg)."""
+    from app.auto_placer import run_post_placement_finalize
 
-    slots[:] = [s for s in slots if len(s.student_ids) > 0]
+    return run_post_placement_finalize(
+        students,
+        slots,
+        rooms,
+        **_cp_sat_post_placement_kwargs(students, slots, rooms, suppressed=suppressed, cfg=cfg),
+    )
 
 
 def _apply_reserve_fallback(
@@ -295,7 +271,8 @@ def _build_auto_solve_result(
     if cfg.minimize_sessions_for:
         n = len(cfg.minimize_sessions_for)
         summary += (
-            f" Mål: färre sessioner för {n} vald{'a' if n != 1 else ''} inspiratör{'er' if n != 1 else ''}."
+            f" Mål: färre sessioner för {n} vald{'a' if n != 1 else ''} "
+            f"inspiratör{'er' if n != 1 else ''}."
         )
     if cfg.room_locks:
         n = len(cfg.room_locks)
@@ -412,9 +389,12 @@ def solve_cp_sat(
     diag.required_total = sum(len(_required_triples(s)) for s in active_students)
 
     for insp, n in demand.items():
-        if 0 < n < cfg.min_session_size:
+        # Detta var tidigare en hård INFEASIBLE-orsak. Nu är min_session_size en mjuk regel
+        # (straff i målfunktionen), så vi lägger bara en hint.
+        if 0 < cfg.min_session_size and 0 < n < cfg.min_session_size:
             diag.infeasible_hints.append(
-                f"{insp}: bara {n} val 1–3 – under min {cfg.min_session_size} per session."
+                f"{insp}: bara {n} val 1–3 – under min {cfg.min_session_size} "
+                "(tillåts men straffas)."
             )
 
     room_by_idx = {i: r for i, r in enumerate(rooms)}
@@ -460,6 +440,7 @@ def solve_cp_sat(
     # sessionsstorlek per (inspiratör, pass)
     session_size: dict[tuple[int, int], cp_model.IntVar] = {}
     session_active: dict[tuple[int, int], cp_model.IntVar] = {}
+    session_deficit: dict[tuple[int, int], cp_model.IntVar] = {}
     for i_idx in range(n_insp):
         for p in range(3):
             terms = [
@@ -474,8 +455,26 @@ def solve_cp_sat(
             session_size[(i_idx, p)] = sz
             active = model.NewBoolVar(f"sess_{i_idx}_{p}")
             session_active[(i_idx, p)] = active
-            model.Add(sz >= cfg.min_session_size).OnlyEnforceIf(active)
+            # Mjuk minsta sessionsstorlek:
+            # - Om sessionen är aktiv: minst 1 elev
+            # - Underskott mot min_session_size straffas i målfunktionen
+            model.Add(sz >= 1).OnlyEnforceIf(active)
             model.Add(sz == 0).OnlyEnforceIf(active.Not())
+            if cfg.min_session_size > 1:
+                undershoot = model.NewIntVar(
+                    0, cfg.min_session_size, f"under_{i_idx}_{p}"
+                )
+                deficit = model.NewIntVar(
+                    0, cfg.min_session_size, f"def_{i_idx}_{p}"
+                )
+                # Straffa bara aktiva sessioner (sz >= 1). Inaktiva (sz == 0)
+                # får undershoot/deficit = 0 – annars blir modellen INFEASIBLE.
+                model.Add(undershoot >= cfg.min_session_size - sz).OnlyEnforceIf(
+                    active
+                )
+                model.Add(undershoot == 0).OnlyEnforceIf(active.Not())
+                model.AddMaxEquality(deficit, [undershoot, 0])
+                session_deficit[(i_idx, p)] = deficit
 
     # Rum per inspiratör
     room_of: list[cp_model.IntVar] = []
@@ -569,6 +568,10 @@ def solve_cp_sat(
                 model.Add(room_of[a] != room_of[b]).OnlyEnforceIf(share.Not())
                 objective_terms.append(share * (-weight))
 
+    if cfg.min_session_size > 1 and session_deficit:
+        for deficit in session_deficit.values():
+            objective_terms.append(deficit * (-cfg.small_session_penalty_weight))
+
     lunch_2a = model.NewIntVar(0, len(active_students), "lunch_2a")
     lunch_2b = model.NewIntVar(0, len(active_students), "lunch_2b")
     terms_2a: list[cp_model.IntVar] = []
@@ -626,11 +629,16 @@ def solve_cp_sat(
     if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
         summary = (
             f"CP-SAT hittade ingen lösning ({diag.status}) på {diag.wall_time:.1f}s. "
-            "Se förslag under – ofta rums-/kapacitetsbrist"
-            " eller för många val till samma inspiratör."
+            "Det betyder att reglerna inte går att uppfylla samtidigt med nuvarande "
+            "rum, kapacitet och krav. Vanliga orsaker: rums-/kapacitetsbrist, för många "
+            "val till samma inspiratör, eller elever som saknar tre giltiga val 1–3."
+            " Förslag: lägg till fler/större rum, sänk «Minst elever per session», "
+            "aktivera «Hybrid vid rumsbrist» (om «Ett rum per inspiratör» är på), "
+            "höj/dra ned tröskeln för dolda inspiratörer, eller komplettera elever "
+            "med saknade val."
         )
         if diag.infeasible_hints:
-            summary += " " + " ".join(diag.infeasible_hints[:3])
+            summary += " Indikationer: " + " ".join(diag.infeasible_hints[:3])
         result = AutoSolveResult(
             placed_new=0,
             slots_created=0,

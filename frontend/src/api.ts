@@ -55,6 +55,10 @@ export type AutoSolveResult = {
   preview_inspirator_status: PreviewInspiratorStatus[] | null;
   /** Vid förhandsgranskning: oplacerade i databasen (det Placering visar innan Verkställ). */
   db_unplaced_student_count: number | null;
+  /** CP-SAT: solverstatus (OPTIMAL/FEASIBLE/INFEASIBLE/UNKNOWN). */
+  solver_status?: string | null;
+  /** CP-SAT: korta hintar om varför det kan vara infeasible. */
+  solver_hints?: string[] | null;
 };
 
 export type PreviewInspiratorStatus = {

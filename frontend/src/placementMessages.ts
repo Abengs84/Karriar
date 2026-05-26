@@ -47,16 +47,20 @@ export function formatPlacementError(result: PlacementResult, passType: string):
     parts.push(`${notChose} elev${notChose === 1 ? "" : "er"} har inte valt inspiratören`);
   }
   if (capacity > 0) {
-    parts.push(`${capacity} fick inte plats (rummet fullt)`);
+    parts.push(
+      `${capacity} fick inte plats i denna ruta (${passLabel} är fullt eller för litet)`
+    );
   }
 
   if (parts.length > 0) {
-    const hint =
-      atPass > 0 && passType === "pass1"
-        ? " Prova att dra gruppen till pass 2 eller pass 3 i stället."
-        : atPass > 0
-          ? " Prova ett annat pass."
-          : "";
+    let hint = "";
+    if (atPass > 0) {
+      hint = " Dra till ett ledigt tidspass (tom ruta) för samma inspiratör.";
+    } else if (capacity > 0 && withInsp === 0) {
+      hint = " Prova en tom ruta för samma inspiratör – ofta pass 2 eller 3 om pass 1 redan är fyllt.";
+    } else if (capacity > 0) {
+      hint = " Prova en annan tom ruta för inspiratören.";
+    }
     return parts.join(". ") + "." + hint;
   }
 

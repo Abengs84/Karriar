@@ -226,11 +226,27 @@ export function AutoPlaceTab({
       });
       if (dryRun) {
         setPreview(result);
-        showMsg("success", formatAutoPlaceToast(result, "preview"));
+        const isCpSatBad =
+          solver === "cp_sat" &&
+          result.solver_status != null &&
+          result.solver_status !== "OPTIMAL" &&
+          result.solver_status !== "FEASIBLE";
+        showMsg(
+          isCpSatBad ? "warn" : "success",
+          isCpSatBad ? result.summary : formatAutoPlaceToast(result, "preview")
+        );
       } else {
         setPreview(result);
         await onDone();
-        showMsg("success", formatAutoPlaceToast(result, "apply"));
+        const isCpSatBad =
+          solver === "cp_sat" &&
+          result.solver_status != null &&
+          result.solver_status !== "OPTIMAL" &&
+          result.solver_status !== "FEASIBLE";
+        showMsg(
+          isCpSatBad ? "warn" : "success",
+          isCpSatBad ? result.summary : formatAutoPlaceToast(result, "apply")
+        );
       }
     } catch (e) {
       showMsg("error", e instanceof Error ? e.message : "Automatisk placering misslyckades");
@@ -374,8 +390,9 @@ export function AutoPlaceTab({
           Global optimering (CP-SAT)
         </label>
         <p className="auto-place-option-hint">
-          CP-SAT söker en lösning som uppfyller alla regler samtidigt (minst{" "}
-          {minSessionSize} elever per session, rum, lunch). Reserv används automatiskt om
+          CP-SAT söker en lösning under hårda regler (rum, kapacitet, lunch m.m.).
+          «Minst elever per session» ({minSessionSize}) är ett mål – små sessioner tillåts
+          men straffas. Reserv används automatiskt om
           något val 1–3 inte får plats. Tar ofta 1–3 minuter och använder alltid
           «Omplacera allt».
         </p>

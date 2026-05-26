@@ -243,10 +243,12 @@ export function PlacementBoard({
       if (placingLockRef.current || ids.length === 0) return;
 
       placingLockRef.current = true;
-      const apiPassType =
-        cell.passType === "pass2"
-          ? "pass2"
-          : resolvePlacementPassType(cell.passType, slots, inspiration);
+      const apiPassType = resolvePlacementPassType(
+        cell.passType,
+        slots,
+        inspiration,
+        cell.roomId
+      );
       try {
         dndDebug("API POST /placements/at-cell …", {
           count: ids.length,
@@ -264,7 +266,7 @@ export function PlacementBoard({
         const { slots: freshSlots } = await onRefresh();
         const resolvedPass =
           cell.passType === "pass2"
-            ? resolvePlacementPassType("pass2", freshSlots, inspiration)
+            ? resolvePlacementPassType("pass2", freshSlots, inspiration, cell.roomId)
             : cell.passType;
         const freshSlot = freshSlots.find(
           (s) => s.room_id === cell.roomId && s.pass_type === resolvedPass
@@ -512,7 +514,12 @@ export function PlacementBoard({
       split.skip_not_chose;
 
     const room = rooms.find((r) => r.id === cell.roomId);
-    const resolvedPass = resolvePlacementPassType(cell.passType, slots, group.inspiration);
+    const resolvedPass = resolvePlacementPassType(
+      cell.passType,
+      slots,
+      group.inspiration,
+      cell.roomId
+    );
     const existingSlot = slotMap.get(`${cell.roomId}-${resolvedPass}`);
     const roomRemaining = room
       ? room.capacity - (existingSlot?.placed_count ?? 0)
@@ -1153,7 +1160,7 @@ function Pass2GridCell({
   const dragInspiration = dragGroup?.inspiration;
   const lockedVariant =
     dragInspiration != null
-      ? resolvePlacementPassType("pass2", slots, dragInspiration)
+      ? resolvePlacementPassType("pass2", slots, dragInspiration, room.id)
       : null;
 
   return (
