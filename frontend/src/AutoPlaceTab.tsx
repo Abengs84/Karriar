@@ -7,6 +7,7 @@ import {
   studentRequiredChoices,
 } from "./placementUtils";
 import { AutoPlaceEngineExplanation } from "./autoPlaceEngineExplanation";
+import { CpSatModelView } from "./CpSatModelView";
 import { DemandHeatmap } from "./DemandHeatmap";
 import type { ToastType } from "./Toast";
 
@@ -119,6 +120,7 @@ export function AutoPlaceTab({
   const [preview, setPreview] = useState<AutoSolveResult | null>(null);
   const [busy, setBusy] = useState(false);
   const [busyPhase, setBusyPhase] = useState<"preview" | "apply" | null>(null);
+  const [pageView, setPageView] = useState<"place" | "cp_sat_model">("place");
 
   useEffect(() => {
     if (!busy) return;
@@ -272,6 +274,18 @@ export function AutoPlaceTab({
         ? "Lämna inte sidan förrän bekräftelsen visas."
         : null;
 
+  const activeStudentsEstimate = useMemo(() => {
+    let n = 0;
+    for (const s of students) {
+      if (studentRequiredChoices(s).length === 3) n += 1;
+    }
+    return n;
+  }, [students]);
+
+  const inspiratorCount =
+    capacityInsight?.inspiratorCount ??
+    collectInspirations(students).length;
+
   return (
     <div className="auto-place-page">
       {busy && (
@@ -281,6 +295,46 @@ export function AutoPlaceTab({
           {busyHint && <p className="auto-place-busy-hint">{busyHint}</p>}
         </div>
       )}
+
+      <div
+        className="schema-view-toggle auto-place-view-toggle"
+        role="tablist"
+        aria-label="Auto-placering"
+      >
+        <button
+          type="button"
+          role="tab"
+          aria-selected={pageView === "place"}
+          className={pageView === "place" ? "active" : ""}
+          onClick={() => setPageView("place")}
+        >
+          Placering
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={pageView === "cp_sat_model"}
+          className={pageView === "cp_sat_model" ? "active" : ""}
+          onClick={() => setPageView("cp_sat_model")}
+        >
+          CP-SAT modell
+        </button>
+      </div>
+
+      {pageView === "cp_sat_model" ? (
+        <CpSatModelView
+          studentCount={activeStudentsEstimate}
+          inspiratorCount={inspiratorCount}
+          roomCount={roomCount}
+          roomLockCount={roomLocks.size}
+          minimizeSessionsCount={minimizeSessionsFor.size}
+          minSessionSize={minSessionSize}
+          sameRoomPerInspirator={sameRoomPerInspirator}
+          balanceLunchTracks={balanceLunchTracks}
+          minimizeSessionsEnabled={solver === "cp_sat"}
+        />
+      ) : (
+        <>
       <section className="card auto-place-settings">
         <div className="auto-place-settings-head">
           <div>
@@ -443,6 +497,7 @@ export function AutoPlaceTab({
         </p>
       </fieldset>
 
+        <div className="auto-place-options-row">
       <fieldset className="auto-place-options">
         <legend>Alternativ</legend>
         <label>
@@ -563,7 +618,6 @@ export function AutoPlaceTab({
           berörda elever styrs mot reserv vid auto-placering (en reserv per elev).
         </p>
       </fieldset>
-        </div>
 
         {solver === "cp_sat" && inspiratorPickerRows.length > 0 && (
           <fieldset className="auto-place-minimize-sessions auto-place-minimize-sessions-panel">
@@ -618,6 +672,8 @@ export function AutoPlaceTab({
             </ul>
           </fieldset>
         )}
+        </div>
+        </div>
 
       <p className="auto-place-hint">
         Börja alltid med <strong>Förhandsgranska</strong>. Jämför alternativ med{" "}
@@ -754,6 +810,8 @@ export function AutoPlaceTab({
           onRoomLockChange={setRoomLock}
         />
       </section>
+        </>
+      )}
     </div>
   );
 }

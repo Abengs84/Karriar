@@ -323,6 +323,21 @@ def purge_invalid_placements(db) -> int:
     return removed
 
 
+def purge_orphan_placements(db) -> int:
+    """Tar bort placeringar vars session_slot saknas (undviker spökoplacerade)."""
+    from app.models import Placement, SessionSlot
+
+    valid_slot_ids = {row[0] for row in db.query(SessionSlot.id).all()}
+    removed = 0
+    for placement in db.query(Placement).all():
+        if placement.session_slot_id not in valid_slot_ids:
+            db.delete(placement)
+            removed += 1
+    if removed:
+        db.flush()
+    return removed
+
+
 def purge_empty_session_slots(db) -> int:
     """Tar bort schemaceller utan elever (kvarlämnade av auto-placering m.m.)."""
     from app.models import Placement, SessionSlot

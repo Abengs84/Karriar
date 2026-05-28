@@ -333,7 +333,7 @@ def _displace_low_demand_from_locked_rooms(
     occ = _room_pass_occupant(slots)
     moved = 0
 
-    for holder, locked_rid in room_locks.items():
+    for holder, locked_rid in list(room_locks.items()):
         holder_demand = demand_counts.get(holder, 0)
         owner = owners.get(locked_rid)
         if owner is None or owner == holder:
@@ -380,6 +380,291 @@ def _displace_low_demand_from_locked_rooms(
                 moved += 1
                 break
     return moved
+
+
+def _free_locked_cells_for_holders(
+    slots: list[SlotRef],
+    rooms: list[RoomRef],
+    room_locks: dict[str, int],
+    demand_counts: dict[str, int],
+) -> int:
+    """Flyttar bort inspiratörer som blockerar en låst cells (rum, passtyp)."""
+    if not room_locks:
+        return 0
+    room_by_id = {r.id: r for r in rooms}
+    occ = _room_pass_occupant(slots)
+    moved = 0
+
+    # Lös 3-cykler: A blockerar B:s lås, B blockerar C:s, C blockerar A:s.
+    edge: dict[tuple[str, str], str] = {}
+    slot_for_holder_pass: dict[tuple[str, str], SlotRef] = {}
+    for sl in slots:
+        if not sl.student_ids:
+            continue
+        holder = sl.inspiration
+        locked_rid = room_locks.get(holder)
+        if locked_rid is None or sl.room_id == locked_rid:
+            continue
+        blocker = occ.get((locked_rid, sl.pass_type))
+        if blocker is None or blocker == holder or blocker not in room_locks:
+            continue
+        edge[(holder, sl.pass_type)] = blocker
+        slot_for_holder_pass[(holder, sl.pass_type)] = sl
+
+    handled: set[tuple[str, str]] = set()
+    for (a, pass_type), b in list(edge.items()):
+        if (a, pass_type) in handled:
+            continue
+        c = edge.get((b, pass_type))
+        if not c or c == a or c == b:
+            continue
+        if edge.get((c, pass_type)) != a:
+            continue
+        sa = slot_for_holder_pass.get((a, pass_type))
+        sb = slot_for_holder_pass.get((b, pass_type))
+        sc = slot_for_holder_pass.get((c, pass_type))
+        if not sa or not sb or not sc:
+            continue
+        ra = room_by_id.get(room_locks[a])
+        rb = room_by_id.get(room_locks[b])
+        rc = room_by_id.get(room_locks[c])
+        if not ra or not rb or not rc:
+            continue
+        if (
+            len(sa.student_ids) > ra.capacity
+            or len(sb.student_ids) > rb.capacity
+            or len(sc.student_ids) > rc.capacity
+        ):
+            continue
+        for s in (sa, sb, sc):
+            if occ.get(s.key) == s.inspiration:
+                del occ[s.key]
+        sa.room_id, sa.capacity = room_locks[a], ra.capacity
+        sb.room_id, sb.capacity = room_locks[b], rb.capacity
+        sc.room_id, sc.capacity = room_locks[c], rc.capacity
+        occ[sa.key] = sa.inspiration
+        occ[sb.key] = sb.inspiration
+        occ[sc.key] = sc.inspiration
+        moved += 3
+        handled.update({(a, pass_type), (b, pass_type), (c, pass_type)})
+
+    for holder, locked_rid in list(room_locks.items()):
+        holder_demand = demand_counts.get(holder, 0)
+        for slot in list(slots):
+            if slot.inspiration != holder or slot.room_id == locked_rid:
+                continue
+            if not slot.student_ids:
+                continue
+            cell_key = (locked_rid, slot.pass_type)
+            blocker = occ.get(cell_key)
+            if blocker is None or blocker == holder:
+                continue
+            blocker_slot = next(
+                (
+                    s
+                    for s in slots
+                    if s.inspiration == blocker
+                    and s.room_id == locked_rid
+                    and s.pass_type == slot.pass_type
+                ),
+                None,
+            )
+            if blocker_slot is None or not blocker_slot.student_ids:
+                continue
+            blocker_demand = demand_counts.get(blocker, 0)
+            blocker_locked_rid = room_locks.get(blocker)
+            holder_room = next((r for r in rooms if r.id == slot.room_id), None)
+            locked_room = next((r for r in rooms if r.id == locked_rid), None)
+
+            # Om blockeraren saknar lås: försök först komprimera till annan befintlig
+            # slot för samma pass (ingen ny cell krävs), för att frigöra låscellen.
+            if blocker_locked_rid is None:
+                group_n = len(blocker_slot.student_ids)
+                merge_target = next(
+                    (
+                        s
+                        for s in sorted(
+                            (
+                                x
+                                for x in slots
+                                if x is not blocker_slot
+                                and x.inspiration == blocker
+                                and x.pass_type == blocker_slot.pass_type
+                            ),
+                            key=lambda x: (-x.remaining, x.room_id),
+                        )
+                        if s.remaining >= group_n
+                    ),
+                    None,
+                )
+                if merge_target is not None:
+                    for sid in blocker_slot.student_ids:
+                        if sid not in merge_target.student_ids:
+                            merge_target.student_ids.append(sid)
+                    old_key = blocker_slot.key
+                    if occ.get(old_key) == blocker:
+                        del occ[old_key]
+                    slots.remove(blocker_slot)
+                    moved += 1
+                    continue
+                fit_room = next(
+                    (
+                        r
+                        for r in sorted(rooms, key=lambda x: (-x.capacity, x.name))
+                        if r.id != locked_rid
+                        and occ.get((r.id, blocker_slot.pass_type)) is None
+                        and r.capacity >= group_n
+                    ),
+                    None,
+                )
+                if fit_room is not None:
+                    old_key = blocker_slot.key
+                    if occ.get(old_key) == blocker:
+                        del occ[old_key]
+                    blocker_slot.room_id = fit_room.id
+                    blocker_slot.capacity = fit_room.capacity
+                    occ[blocker_slot.key] = blocker
+                    moved += 1
+                    continue
+                has_fit_room = False
+                holder_room_capacity = holder_room.capacity if holder_room else 0
+                can_swap_here = holder_room_capacity >= group_n
+                # Sista utväg i hybridläge: om blockeraren saknar lås och varken
+                # merge, tom fit-cell eller swap är möjlig, släpp holder-låset.
+                if not has_fit_room and not can_swap_here:
+                    room_locks.pop(holder, None)
+                    moved += 1
+                    continue
+
+            n = len(blocker_slot.student_ids)
+            if blocker_locked_rid is not None and blocker_locked_rid != locked_rid:
+                blocker_target_room = room_by_id.get(blocker_locked_rid)
+                if blocker_target_room is not None:
+                    target_key = (blocker_locked_rid, blocker_slot.pass_type)
+                    occ_target = occ.get(target_key)
+                    blocker_n = len(blocker_slot.student_ids)
+                    if occ_target is None and blocker_n <= blocker_target_room.capacity:
+                        old_key = blocker_slot.key
+                        if occ.get(old_key) == blocker:
+                            del occ[old_key]
+                        blocker_slot.room_id = blocker_locked_rid
+                        blocker_slot.capacity = blocker_target_room.capacity
+                        occ[blocker_slot.key] = blocker
+                        moved += 1
+                        continue
+            if holder_room and locked_room:
+                holder_n = len(slot.student_ids)
+                blocker_n = len(blocker_slot.student_ids)
+                reciprocal_lock = blocker_locked_rid == holder_room.id
+                # Direkt swap av samma passtyp löser deadlock, särskilt vid reciproka lås.
+                if (
+                    holder_n <= locked_room.capacity
+                    and blocker_n <= holder_room.capacity
+                    and (
+                        reciprocal_lock
+                        or blocker not in room_locks
+                        or blocker_demand < holder_demand
+                    )
+                ):
+                    holder_old_key = slot.key
+                    blocker_old_key = blocker_slot.key
+                    if occ.get(holder_old_key) == holder:
+                        del occ[holder_old_key]
+                    if occ.get(blocker_old_key) == blocker:
+                        del occ[blocker_old_key]
+                    slot.room_id = locked_rid
+                    slot.capacity = locked_room.capacity
+                    blocker_slot.room_id = holder_room.id
+                    blocker_slot.capacity = holder_room.capacity
+                    occ[slot.key] = holder
+                    occ[blocker_slot.key] = blocker
+                    moved += 1
+                    continue
+            if blocker in room_locks and blocker_demand >= holder_demand:
+                continue
+            for room in sorted(rooms, key=lambda r: (-r.capacity, r.name)):
+                if room.id == locked_rid:
+                    continue
+                alt_key = (room.id, blocker_slot.pass_type)
+                if occ.get(alt_key) is not None:
+                    continue
+                lock_holder = next(
+                    (insp for insp, rid in room_locks.items() if rid == room.id),
+                    None,
+                )
+                if (
+                    lock_holder
+                    and lock_holder != blocker
+                    and demand_counts.get(lock_holder, 0) > blocker_demand
+                ):
+                    continue
+                old_key = blocker_slot.key
+                if occ.get(old_key) == blocker:
+                    del occ[old_key]
+                blocker_slot.room_id = room.id
+                blocker_slot.capacity = room.capacity
+                occ[blocker_slot.key] = blocker
+                moved += 1
+                break
+    return moved
+
+
+def _enforce_room_locks(
+    slots: list[SlotRef],
+    rooms: list[RoomRef],
+    room_locks: dict[str, int] | None,
+    demand_counts: dict[str, int],
+) -> None:
+    if not room_locks:
+        return
+
+    room_capacity = {r.id: r.capacity for r in rooms}
+    # Balansera lås mot observerad maxgrupp per inspiratör i aktuella slots.
+    # Minskar fall där låst rum är uppenbart för litet men ett större låst rum
+    # kan bytas utan att den andre går över kapacitet.
+    peak_need: dict[str, int] = {}
+    for sl in slots:
+        if not sl.student_ids:
+            continue
+        peak_need[sl.inspiration] = max(
+            peak_need.get(sl.inspiration, 0), len(sl.student_ids)
+        )
+    holder_by_room = {rid: insp for insp, rid in room_locks.items()}
+    for insp in sorted(room_locks.keys(), key=lambda i: (-peak_need.get(i, 0), i)):
+        rid = room_locks[insp]
+        need = peak_need.get(insp, 0)
+        if need <= 0:
+            continue
+        if room_capacity.get(rid, 0) >= need:
+            continue
+        candidates = sorted(
+            room_locks.keys(),
+            key=lambda other: (-room_capacity.get(room_locks[other], 0), other),
+        )
+        for other in candidates:
+            if other == insp:
+                continue
+            other_rid = room_locks[other]
+            if room_capacity.get(other_rid, 0) < need:
+                continue
+            other_need = peak_need.get(other, 0)
+            if room_capacity.get(rid, 0) < other_need:
+                continue
+            room_locks[insp], room_locks[other] = other_rid, rid
+            holder_by_room[other_rid], holder_by_room[rid] = insp, other
+            break
+
+    max_rounds = max(6, len(room_locks) * 2)
+    for _ in range(max_rounds):
+        moved_low = _displace_low_demand_from_locked_rooms(
+            slots, rooms, room_locks, demand_counts, low_demand_ceiling=0
+        )
+        moved_block = _free_locked_cells_for_holders(
+            slots, rooms, room_locks, demand_counts
+        )
+        moved_lock = _relocate_slots_to_locked_rooms(slots, rooms, room_locks)
+        if moved_low + moved_block + moved_lock <= 0:
+            break
 
 
 def _relocate_slots_to_locked_rooms(
@@ -791,10 +1076,23 @@ def _seed_missing_schedule_passes_at_room(
         to_create.append("pass3")
 
     created = 0
-    for pass_type in to_create:
+    for pass_type in list(to_create):
         key = (room_id, pass_type)
         if key in occ and occ[key] != inspiration:
-            continue
+            if (
+                schedule_pass_key(pass_type) == "pass2"
+                and pass_type == "pass2a"
+            ):
+                alt = "pass2b"
+                alt_key = (room_id, alt)
+                if alt_key in occ and occ[alt_key] != inspiration:
+                    continue
+                pass_type = alt
+                key = alt_key
+                if pass_type not in to_create:
+                    continue
+            else:
+                continue
         if any(
             s.room_id == room_id
             and s.pass_type == pass_type
@@ -1035,6 +1333,7 @@ def run_post_placement_finalize(
             inspirator_pass2_targets=inspirator_pass2_targets,
             demand_counts=demand_counts,
         )
+        _enforce_room_locks(slots, rooms, room_locks, demand_counts)
 
     session_kwargs = dict(
         suppressed=suppressed,
@@ -1082,10 +1381,16 @@ def run_post_placement_finalize(
             progress = True
         if place_unplaced_pass2_share:
             n = _try_place_unplaced_in_pass2_room_share(
-                students, slots, rooms, suppressed=suppressed
+                students,
+                slots,
+                rooms,
+                suppressed=suppressed,
+                room_locks=room_locks,
             )
             if n > 0:
                 progress = True
+                if room_locks:
+                    _enforce_room_locks(slots, rooms, room_locks, demand_counts)
                 if _try_fill_empty_schedule_passes(students, slots, rooms, **fill_kwargs):
                     progress = True
         if _try_complete_partial_schedules(students, slots, rooms, **fill_kwargs):
@@ -1102,9 +1407,11 @@ def run_post_placement_finalize(
 
     _seed_missing_passes_for_pending_inspirators(slots, rooms, students, **seed_kwargs)
     _hard_complete_all_pending(students, slots, rooms, **session_kwargs)
+    if room_locks:
+        _enforce_room_locks(slots, rooms, room_locks, demand_counts)
 
     _rebuild_slot_student_ids_from_placements(students, slots)
-    slots[:] = [s for s in slots if len(s.student_ids) > 0]
+
     return len(_pending_needs(students, suppressed))
 
 
@@ -1463,9 +1770,12 @@ def _find_slot_for(
     exclusive_inspirators: set[str] | None = None,
     demand_counts: dict[str, int] | None = None,
 ) -> SlotRef | None:
+    locked_room_id = room_locks.get(inspiration) if room_locks else None
     existing_for_insp = [
         s for s in slots if s.inspiration == inspiration and s.pass_type == pass_type
     ]
+    if locked_room_id is not None:
+        existing_for_insp = [s for s in existing_for_insp if s.room_id == locked_room_id]
     if existing_for_insp:
         candidates = [s for s in existing_for_insp if s.remaining > 0]
         if candidates:
@@ -1910,11 +2220,12 @@ def _try_place_unplaced_in_pass2_room_share(
     rooms: list[RoomRef],
     *,
     suppressed: set[str] | None = None,
+    room_locks: dict[str, int] | None = None,
 ) -> int:
     """Placerar oplacerade inspiratörer i pass 2 genom att dela rum (2a/2b).
 
     Om ett rum redan har pass 2a bokat öppnas pass 2b för en oplacerad grupp
-    (och tvärtom). Gäller även rum som annars är låsta till en annan inspiratör.
+    (och tvärtom). Inspiratörer med rumslås får bara pass 2 i sitt låsta rum.
     """
     room_map = {r.id: r for r in rooms}
     opportunities = _collect_pass2_complement_room_opportunities(slots)
@@ -1938,18 +2249,23 @@ def _try_place_unplaced_in_pass2_room_share(
             continue
         locked_p2 = _inspirator_pass2_variant_locked(slots, inspiration)
         insp_keys = _inspirator_schedule_pass_keys(slots, inspiration)
+        locked_rid = room_locks.get(inspiration) if room_locks else None
 
         existing_p2 = [
             s
             for s in slots
             if s.inspiration == inspiration and s.pass_type in PASS2_VARIANTS
         ]
+        if locked_rid is not None:
+            existing_p2 = [s for s in existing_p2 if s.room_id == locked_rid]
         slot: SlotRef | None = None
         if existing_p2:
             slot = next((s for s in existing_p2 if s.remaining > 0), None)
         if not slot:
             candidates: list[tuple[int, str, int]] = []
             for room_id, pass_type in opportunities:
+                if locked_rid is not None and room_id != locked_rid:
+                    continue
                 if (room_id, pass_type) in occ:
                     continue
                 if locked_p2 and locked_p2 != pass_type:
@@ -3010,6 +3326,7 @@ def solve_auto_placement(
                 slots,
                 rooms,
                 suppressed=suppressed,
+                room_locks=room_locks,
             )
             if n <= 0:
                 break
@@ -3380,22 +3697,43 @@ def apply_replace_solution_to_db(
     _prune_student_placements_to_slots(students_ref, slots)
     _rebuild_slot_student_ids_from_placements(students_ref, slots)
 
+    apply_slots = _merge_slots_for_apply(slots)
+
     student_by_id = {s.id: s for s in students_orm}
     written = 0
     skipped = 0
     seen_schedule: set[tuple[int, str]] = set()
+    db_slot_by_key: dict[tuple[int, str], object] = {}
 
-    for slot in _merge_slots_for_apply(slots):
-        if not slot.student_ids:
-            continue
-
-        db_slot = SessionSlot(
-            room_id=slot.room_id,
-            pass_type=slot.pass_type,
-            inspiration=slot.inspiration,
-        )
-        db.add(db_slot)
-        db.flush()
+    for slot in apply_slots:
+        cell_key = (slot.room_id, slot.pass_type)
+        db_slot = db_slot_by_key.get(cell_key)
+        if db_slot is not None and db_slot.inspiration != slot.inspiration:
+            alt_key = None
+            for other in apply_slots:
+                if (
+                    other.inspiration == slot.inspiration
+                    and other.pass_type == slot.pass_type
+                    and (other.room_id, other.pass_type) != cell_key
+                ):
+                    alt_key = (other.room_id, other.pass_type)
+                    break
+            if alt_key is None:
+                skipped += len(slot.student_ids)
+                continue
+            cell_key = alt_key
+            db_slot = db_slot_by_key.get(cell_key)
+        if db_slot is None:
+            db_slot = SessionSlot(
+                room_id=cell_key[0],
+                pass_type=cell_key[1],
+                inspiration=slot.inspiration,
+            )
+            db.add(db_slot)
+            db.flush()
+            db_slot_by_key[cell_key] = db_slot
+        elif not db_slot.inspiration:
+            db_slot.inspiration = slot.inspiration
 
         for sid in slot.student_ids:
             schedule_key = schedule_pass_key(slot.pass_type)

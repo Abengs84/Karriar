@@ -116,6 +116,79 @@ def _cp_sat_post_placement_kwargs(
         if cfg.hybrid_room_when_short and exclusive_only is not None:
             exclusive_inspirators = exclusive_only
 
+    if room_locks:
+        ranked_locks = sorted(
+            room_locks.items(),
+            key=lambda item: (-demand_counts.get(item[0], 0), item[0]),
+        )
+        used_rooms: set[int] = set()
+        unique_locks: dict[str, int] = {}
+        for insp, rid in ranked_locks:
+            if rid in used_rooms:
+                continue
+            unique_locks[insp] = rid
+            used_rooms.add(rid)
+        room_locks = unique_locks
+
+        # Uppskatta behov per pass (inte total efterfrågan), annars blir låsning för aggressiv.
+        pass_need: dict[str, int] = {}
+        for sl in slots:
+            if not sl.student_ids:
+                continue
+            pass_need[sl.inspiration] = max(
+                pass_need.get(sl.inspiration, 0), len(sl.student_ids)
+            )
+        for insp, demand in demand_counts.items():
+            est = max(1, (demand + 2) // 3)
+            pass_need[insp] = max(pass_need.get(insp, 0), est)
+
+        # Uppgradera lås som hamnat i för små rum relativt pass-behovet.
+        room_by_id = {r.id: r for r in rooms}
+        room_to_insp = {rid: insp for insp, rid in room_locks.items()}
+        for insp in sorted(
+            room_locks.keys(), key=lambda i: (-demand_counts.get(i, 0), i)
+        ):
+            need = pass_need.get(insp, 0)
+            current_rid = room_locks[insp]
+            current_room = room_by_id.get(current_rid)
+            if current_room is None or current_room.capacity >= need:
+                continue
+            candidates = sorted(
+                [r for r in rooms if r.capacity >= need],
+                key=lambda r: (-r.capacity, r.name),
+            )
+            for room in candidates:
+                holder = room_to_insp.get(room.id)
+                if holder is None:
+                    del room_to_insp[current_rid]
+                    room_locks[insp] = room.id
+                    room_to_insp[room.id] = insp
+                    break
+                if holder == insp:
+                    break
+                holder_need = pass_need.get(holder, 0)
+                if current_room.capacity < holder_need:
+                    continue
+                room_locks[insp] = room.id
+                room_locks[holder] = current_rid
+                room_to_insp[room.id] = insp
+                room_to_insp[current_rid] = holder
+                break
+
+        # Hybrid-säkring: droppa bara lås som är omöjliga även mot pass-behovet.
+        pruned_locks: dict[str, int] = {}
+        for insp, rid in room_locks.items():
+            room = room_by_id.get(rid)
+            need = pass_need.get(insp, 0)
+            if room is None:
+                continue
+            if room.capacity < need:
+                continue
+            pruned_locks[insp] = rid
+        room_locks = pruned_locks
+        if exclusive_inspirators is not None:
+            exclusive_inspirators = set(room_locks.keys())
+
     return dict(
         suppressed=suppressed,
         inspirator_pass2_targets=pass2_targets,

@@ -28,6 +28,7 @@ from app.database import SessionLocal, get_db, init_db
 from app.helpers import (
     purge_empty_session_slots,
     purge_invalid_placements,
+    purge_orphan_placements,
     suppressed_inspirations,
     collect_all_inspirations,
     has_placement_at_pass,
@@ -1299,6 +1300,143 @@ def auto_solve(data: AutoSolveRequest, db: Session = Depends(get_db)):
                         left_after_finalize,
                         len(slots),
                     )
+                    try:
+                        from app.placement_cp_sat import _cp_sat_post_placement_kwargs
+
+                        post_kwargs = _cp_sat_post_placement_kwargs(
+                            students,
+                            slots,
+                            rooms,
+                            suppressed=suppressed_set,
+                            cfg=cp_sat_config,
+                        )
+                        room_locks_dbg = post_kwargs.get("room_locks") or {}
+                        room_capacity_by_id = {r.id: r.capacity for r in rooms}
+                        by_insp_rooms: dict[str, set[int]] = {}
+                        pass2_outside_lock: list[dict[str, object]] = []
+                        outside_lock_all: list[dict[str, object]] = []
+                        occ_by_cell: dict[tuple[int, str], tuple[str, int]] = {}
+                        for sl in slots:
+                            occ_by_cell[(sl.room_id, sl.pass_type)] = (
+                                sl.inspiration,
+                                len(sl.student_ids),
+                            )
+                        for sl in slots:
+                            by_insp_rooms.setdefault(sl.inspiration, set()).add(sl.room_id)
+                            if (
+                                sl.inspiration in room_locks_dbg
+                                and sl.room_id != room_locks_dbg[sl.inspiration]
+                                and len(sl.student_ids) > 0
+                            ):
+                                total_same_pass = sum(
+                                    len(s2.student_ids)
+                                    for s2 in slots
+                                    if s2.inspiration == sl.inspiration
+                                    and s2.pass_type == sl.pass_type
+                                )
+                                locked_same_pass = sum(
+                                    len(s2.student_ids)
+                                    for s2 in slots
+                                    if s2.inspiration == sl.inspiration
+                                    and s2.pass_type == sl.pass_type
+                                    and s2.room_id == room_locks_dbg[sl.inspiration]
+                                )
+                                blocked = occ_by_cell.get(
+                                    (room_locks_dbg[sl.inspiration], sl.pass_type)
+                                )
+                                blocked_insp = blocked[0] if blocked else None
+                                blocked_students = blocked[1] if blocked else 0
+                                current_room_capacity = room_capacity_by_id.get(sl.room_id)
+                                free_rooms_same_pass = sorted(
+                                    [
+                                        {
+                                            "room_id": r.id,
+                                            "capacity": r.capacity,
+                                        }
+                                        for r in rooms
+                                        if occ_by_cell.get((r.id, sl.pass_type)) is None
+                                    ],
+                                    key=lambda row2: (-row2["capacity"], row2["room_id"]),
+                                )
+                                free_fit = [
+                                    row2
+                                    for row2 in free_rooms_same_pass
+                                    if row2["capacity"] >= len(sl.student_ids)
+                                ]
+                                row = {
+                                    "inspiration": sl.inspiration,
+                                    "room_id": sl.room_id,
+                                    "current_room_capacity": current_room_capacity,
+                                    "locked_room": room_locks_dbg[sl.inspiration],
+                                    "pass_type": sl.pass_type,
+                                    "students": len(sl.student_ids),
+                                    "blocked_by_inspiration": blocked_insp,
+                                    "blocked_by_students": blocked_students,
+                                    "blocked_by_has_lock": blocked_insp in room_locks_dbg
+                                    if blocked_insp
+                                    else False,
+                                    "blocked_by_locked_room": room_locks_dbg.get(blocked_insp)
+                                    if blocked_insp
+                                    else None,
+                                    "swap_capacity_ok": (
+                                        blocked_students <= current_room_capacity
+                                        if current_room_capacity is not None
+                                        else False
+                                    ),
+                                    "locked_room_capacity": room_capacity_by_id.get(
+                                        room_locks_dbg[sl.inspiration]
+                                    ),
+                                    "total_same_pass_students": total_same_pass,
+                                    "locked_same_pass_students": locked_same_pass,
+                                    "free_rooms_same_pass_count": len(free_rooms_same_pass),
+                                    "free_fit_same_pass_count": len(free_fit),
+                                    "free_fit_same_pass_top": free_fit[:5],
+                                }
+                                outside_lock_all.append(row)
+                                if schedule_pass_key(sl.pass_type) == "pass2":
+                                    pass2_outside_lock.append(
+                                        row
+                                    )
+                        outside_lock_all.sort(
+                            key=lambda r: (-int(r["students"]), str(r["inspiration"]))
+                        )
+                        pass2_outside_lock.sort(
+                            key=lambda r: (-int(r["students"]), str(r["inspiration"]))
+                        )
+                        multi_room_sample = [
+                            {
+                                "inspiration": insp,
+                                "rooms": sorted(list(rids)),
+                            }
+                            for insp, rids in by_insp_rooms.items()
+                            if len(rids) > 1
+                        ]
+                        multi_room_sample.sort(
+                            key=lambda row: (
+                                -sum(
+                                    1
+                                    for st in students
+                                    if any(
+                                        c.inspiration == row["inspiration"]
+                                        for c in st.choices_ordered()
+                                    )
+                                ),
+                                row["inspiration"],
+                            )
+                        )
+                        logger.warning(
+                            "PLACEMENT_DEBUG room_policy same_room=%s hybrid=%s place_unplaced_pass2_share=%s locks=%s exclusive_only=%s pass2_outside_lock=%s outside_lock_all=%s multi_room_sample=%s",
+                            data.same_room_per_inspirator,
+                            data.hybrid_room_when_short,
+                            data.place_unplaced_pass2_share,
+                            len(room_locks_dbg),
+                            len(post_kwargs.get("exclusive_inspirators") or []),
+                            pass2_outside_lock[:12],
+                            outside_lock_all[:12],
+                            multi_room_sample[:12],
+                        )
+                    except Exception as e:
+                        logger.exception("PLACEMENT_DEBUG room_policy_snapshot failed: %s", e)
             _, apply_skipped = apply_replace_solution_to_db(
                 db,
                 students_orm,
@@ -1307,8 +1445,11 @@ def auto_solve(data: AutoSolveRequest, db: Session = Depends(get_db)):
             )
         else:
             apply_fill_solution_to_db(db, students_orm, slots)
+        # Säkerställ att placements/session_slots är flushade innan purge-queries.
+        db.flush()
         purge_invalid_placements(db)
         purge_empty_session_slots(db)
+        purge_orphan_placements(db)
         db.commit()
         placements_in_db = db.query(Placement).count()
         students_orm = (
